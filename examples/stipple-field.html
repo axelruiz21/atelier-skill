@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<!--
+    STIPPLE FIELD — a weighted stippling instrument
+    Axel Ruiz studio · Atelier canon · 2026
+
+    A photograph is dissolved into ink. Luminance becomes probability,
+    probability becomes a field of dots, and the dots negotiate their
+    positions until the darkness of the source is carried entirely by
+    their spacing and weight. Nothing is drawn; everything is settled.
+
+    The system, in order:
+      1. The source image is reduced to a contrast-mapped luminance
+         density field (darkness = ink demand).
+      2. Seeded rejection sampling (mulberry32 PRNG) throws candidate
+         points and keeps them in proportion to local darkness.
+      3. Lloyd relaxation moves each point to the density-weighted
+         centroid of its Voronoi region (after Secord, "Weighted Voronoi
+         Stippling", NPAR 2002) — computed here with an exact
+         grid-bucketed nearest-neighbour ring search over every pixel.
+      4. Each surviving dot is inked with a radius weighted by the
+         darkness beneath it.
+
+    The reproducibility contract: composition never touches
+    Math.random(). One seed, one frame, exactly — rerolling walks
+    seed-space with a deterministic Lehmer step, so exploration is
+    navigation, not gambling.
+
+    If no photograph is offered, the instrument opens on a procedural
+    study — a lit sphere on a shadowed ground, the canonical stippling
+    test object — so the tool is never exhibited empty.
+
+    Single file. No dependencies beyond a canonical font CDN.
+    Opens from the filesystem.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stipple Field — Weighted Voronoi Stippling</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700&display=swap" rel="stylesheet">
+<style>
+:root {
+    --ink: #111111;
+    --paper: #ffffff;
+    --line: #e4e4e1;
+    --line-strong: #111111;
+    --mute: #8a8a86;
+    --accent: #1f4a2b;
+    --accent-bright: #2d6b3f;
+    --grotesque: 'Helvetica Neue', 'Inter', Arial, sans-serif;
+    --mono: 'Space Mono', 'Courier New', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+    font-family: var(--grotesque);
+    background: var(--paper);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+/* ---- Topbar ---- */
+.topbar {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 18px 28px;
+    border-bottom: 1px solid var(--line-strong);
+}
+.topbar .brand { font-size: 13px; font-weight: 700; letter-spacing: 0.34em; text-transform: uppercase; }
+.topbar .meta  { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--mute); }
+
+/* ---- Layout ---- */
+.layout { display: flex; align-items: stretch; min-height: calc(100vh - 59px); }
+.stage {
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 56px 56px 40px;
+    /* sub-perceptual texture — invisible until looked for */
+    background:
+        repeating-linear-gradient(0deg, transparent, transparent 39px, rgba(17,17,17,0.015) 40px),
+        var(--paper);
+}
+.work {
+    width: 100%; max-width: 940px;
+    display: flex; flex-direction: column; align-items: center; gap: 26px;
+}
+#canvas-container {
+    max-width: 100%;
+    border: 1px solid var(--line-strong);
+    background: #fff; line-height: 0;
+}
+#canvas-container.dropping { border-color: var(--accent); }
+#cv { display: block; max-width: 100%; max-height: 68vh; width: auto; height: auto; }
+
+/* ---- Placard ---- */
+.placard {
+    width: 100%;
+    border-top: 1px solid var(--line); padding-top: 14px;
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+}
+.placard-title { font-size: 13px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; }
+.placard-line  { font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em; color: var(--mute); }
+.placard-line .accent { color: var(--accent); }
+.status {
+    margin-left: auto;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--mute);
+}
+
+/* ---- Panel ---- */
+.panel {
+    width: 372px; flex-shrink: 0;
+    border-left: 1px solid var(--line-strong);
+    overflow-y: auto; max-height: calc(100vh - 59px);
+    background: var(--paper);
+}
+.section { padding: 24px 28px; border-bottom: 1px solid var(--line); }
+.section:last-child { border-bottom: none; }
+.section-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+.section-head .idx   { font-family: var(--mono); font-size: 11px; color: var(--accent); font-weight: 700; }
+.section-head .title { font-size: 11px; font-weight: 600; letter-spacing: 0.26em; text-transform: uppercase; }
+
+/* ---- Fields ---- */
+.field { margin-bottom: 18px; }
+.field:last-child { margin-bottom: 0; }
+.field-label { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 9px; }
+.field-label .name { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink); }
+.field-label .val  { font-family: var(--mono); font-size: 11px; color: var(--ink); }
+
+input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 1px; background: var(--line-strong); outline: none; cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 11px; height: 11px;
+    background: var(--ink); border-radius: 0; cursor: pointer;
+    transition: background 0.12s;
+}
+input[type="range"]::-webkit-slider-thumb:hover { background: var(--accent); }
+input[type="range"]::-moz-range-thumb {
+    width: 11px; height: 11px; background: var(--ink);
+    border: none; border-radius: 0; cursor: pointer;
+}
+input[type="range"]::-moz-range-thumb:hover { background: var(--accent); }
+
+/* ---- Buttons ---- */
+.btn {
+    display: inline-block; width: 100%;
+    background: var(--paper); color: var(--ink); border: 1px solid var(--ink);
+    padding: 11px 12px;
+    font-family: var(--grotesque); font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0.18em; text-transform: uppercase; cursor: pointer;
+    transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+.btn:hover { background: var(--ink); color: var(--paper); }
+.btn.accent { border-color: var(--accent); color: var(--accent); }
+.btn.accent:hover { background: var(--accent); color: var(--paper); border-color: var(--accent); }
+.stack > * { margin-bottom: 8px; }
+.stack > *:last-child { margin-bottom: 0; }
+
+/* ---- Checkbox ---- */
+.toggle { display: flex; align-items: center; justify-content: space-between; }
+.toggle .name { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; }
+.toggle input[type="checkbox"] {
+    appearance: none; -webkit-appearance: none; width: 16px; height: 16px;
+    border: 1px solid var(--ink); background: var(--paper); cursor: pointer; position: relative;
+}
+.toggle input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
+.toggle input[type="checkbox"]:checked::after {
+    content: ''; position: absolute; left: 4px; top: 1px; width: 5px; height: 9px;
+    border: solid var(--paper); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg);
+}
+
+/* ---- Seed input ---- */
+.seed-input {
+    width: 100%; background: var(--paper); border: 1px solid var(--line-strong);
+    padding: 11px; font-family: var(--mono); font-size: 13px; letter-spacing: 0.1em;
+    text-align: center; color: var(--ink);
+}
+.seed-input:focus { outline: none; border-color: var(--accent); }
+
+/* ---- Small print ---- */
+.hint {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    color: var(--mute); margin-top: 10px;
+}
+.readout {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.04em;
+    color: var(--ink); margin-top: 12px;
+    padding-top: 12px; border-top: 1px solid var(--line);
+    word-break: break-all;
+}
+.fname { text-align: center; }
+
+@media (max-width: 1020px) {
+    .layout { flex-direction: column; }
+    .panel { width: 100%; border-left: none; border-top: 1px solid var(--line-strong); max-height: none; }
+    .stage { padding: 32px 20px 24px; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="brand">Atelier — Stipple Field</div>
+    <div class="meta">Weighted Voronoi Stippling · After Secord 2002</div>
+</header>
+
+<main class="layout">
+
+    <section class="stage" id="stage">
+        <div class="work">
+            <div id="canvas-container"><canvas id="cv"></canvas></div>
+            <div class="placard">
+                <div class="placard-title">Stipple Field</div>
+                <div class="placard-line" id="placard-line"></div>
+                <div class="status" id="status"></div>
+            </div>
+        </div>
+    </section>
+
+    <aside class="panel">
+
+        <div class="section">
+            <div class="section-head"><span class="idx">01</span><span class="title">Source</span></div>
+            <button class="btn" id="upload-btn" type="button">Upload Photograph</button>
+            <div class="hint">or drop an image onto the stage</div>
+            <div class="readout" id="source-readout"></div>
+        </div>
+
+        <div class="section">
+            <div class="section-head"><span class="idx">02</span><span class="title">Composition</span></div>
+            <div class="field">
+                <div class="field-label"><span class="name">Dots</span><span class="val" id="dots-val"></span></div>
+                <input type="range" id="dots" min="500" max="16000" step="100" value="6000">
+            </div>
+            <div class="field">
+                <div class="field-label"><span class="name">Contrast</span><span class="val" id="contrast-val"></span></div>
+                <input type="range" id="contrast" min="-100" max="100" step="5" value="0">
+            </div>
+            <div class="field">
+                <div class="field-label"><span class="name">Relaxation</span><span class="val" id="relax-val"></span></div>
+                <input type="range" id="relax" min="0" max="8" step="1" value="6">
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-head"><span class="idx">03</span><span class="title">Ink</span></div>
+            <div class="field">
+                <div class="field-label"><span class="name">Dot Size</span><span class="val" id="size-val"></span></div>
+                <input type="range" id="size" min="50" max="200" step="5" value="100">
+            </div>
+            <div class="field">
+                <div class="toggle">
+                    <span class="name">Invert — White on Ink</span>
+                    <input type="checkbox" id="invert">
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-head"><span class="idx">04</span><span class="title">Seed</span></div>
+            <div class="stack">
+                <input class="seed-input" id="seed" type="text" inputmode="numeric" value="4271" spellcheck="false" autocomplete="off">
+                <button class="btn" id="reroll" type="button">Reroll Seed</button>
+            </div>
+            <div class="hint">same seed — same field, exactly</div>
+        </div>
+
+        <div class="section">
+            <div class="section-head"><span class="idx">05</span><span class="title">Output</span></div>
+            <button class="btn accent" id="download" type="button">Download PNG — 2×</button>
+            <div class="hint fname" id="fname"></div>
+        </div>
+
+    </aside>
+
+</main>
+
+<input type="file" id="file" accept="image/*" hidden>
+
+<script>
+'use strict';
+
+/* ================= seeded PRNG — mulberry32 =================
+   The reproducibility contract: composition never calls Math.random(). */
+function mulberry32(seed) {
+    let a = seed >>> 0;
+    return function () {
+        a |= 0; a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+/* Export filename carries the work's identity. */
+function exportName(title, seed) {
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    return `${slug}_seed-${seed}.png`;
+}
+
+const $ = id => document.getElementById(id);
+
+/* ================= state ================= */
+const state = {
+    seed: 4271,
+    dots: 6000,
+    contrast: 0,   /* raw slider, mapped to slope 2^(x/50) in [0.25, 4] */
+    relax: 6,
+    size: 1.0,
+    invert: false,
+};
+let walker = state.seed;          /* deterministic Lehmer walk through seed-space */
+
+let source = null;                /* HTMLImageElement or canvas */
+let sourceName = 'procedural study — sphere';
+let srcW = 0, srcH = 0;
+
+let dw = 0, dh = 0;               /* density buffer dimensions */
+let density = null;               /* Float32Array, darkness in [0,1] */
+let points = null, pn = 0;        /* Float64Array [x0,y0,x1,y1,...] in density space */
+
+const cv = $('cv');
+const ctx = cv.getContext('2d');
+
+/* ================= density field =================
+   Contrast-mapped luminance: darkness is demand for ink. */
+function buildDensity() {
+    const maxSide = 480;
+    const s = Math.min(1, maxSide / Math.max(srcW, srcH));
+    dw = Math.max(2, Math.round(srcW * s));
+    dh = Math.max(2, Math.round(srcH * s));
+    const c = document.createElement('canvas');
+    c.width = dw; c.height = dh;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.fillStyle = '#ffffff';
+    g.fillRect(0, 0, dw, dh);
+    g.drawImage(source, 0, 0, dw, dh);
+    const data = g.getImageData(0, 0, dw, dh).data;
+    const slope = Math.pow(2, state.contrast / 50);
+    density = new Float32Array(dw * dh);
+    for (let i = 0, p = 0; i < density.length; i++, p += 4) {
+        const lum = (0.2126 * data[p] + 0.7152 * data[p + 1] + 0.0722 * data[p + 2]) / 255;
+        let v = 0.5 + (lum - 0.5) * slope;
+        v = v < 0 ? 0 : v > 1 ? 1 : v;
+        let d = 1 - v;
+        if (d < 0.02) d = 0;      /* keep the paper clean */
+        density[i] = d;
+    }
+}
+
+/* ================= stipple computation =================
+   1. Seeded rejection sampling proportional to darkness.
+   2. Lloyd relaxation toward density-weighted Voronoi centroids —
+      exact per-pixel nearest-neighbour via grid-bucketed ring search. */
+function compute() {
+    buildDensity();
+    const r = mulberry32(state.seed);
+    const n = state.dots;
+    points = new Float64Array(n * 2);
+    pn = n;
+
+    /* -- rejection sampling -- */
+    let placed = 0, guard = n * 600;
+    while (placed < n && guard-- > 0) {
+        const x = r() * dw, y = r() * dh;
+        if (r() < density[(y | 0) * dw + (x | 0)]) {
+            points[placed * 2] = x; points[placed * 2 + 1] = y; placed++;
+        }
+    }
+    while (placed < n) {          /* near-white source: fall back to uniform */
+        points[placed * 2] = r() * dw; points[placed * 2 + 1] = r() * dh; placed++;
+    }
+
+    /* -- Lloyd relaxation -- */
+    const iters = state.relax;
+    if (iters === 0) return;
+
+    const cell = Math.max(2, Math.sqrt(dw * dh / n) * 1.4);
+    const gw = Math.ceil(dw / cell), gh = Math.ceil(dh / cell), gn = gw * gh;
+    const counts = new Int32Array(gn);
+    const starts = new Int32Array(gn + 1);
+    const cursor = new Int32Array(gn);
+    const order  = new Int32Array(n);
+    const sx = new Float64Array(n), sy = new Float64Array(n), sw = new Float64Array(n);
+    const maxRing = Math.max(gw, gh);
+
+    for (let it = 0; it < iters; it++) {
+        /* bucket points into a CSR grid */
+        counts.fill(0);
+        for (let j = 0; j < n; j++) {
+            const cx = Math.min(gw - 1, points[j * 2] / cell | 0);
+            const cy = Math.min(gh - 1, points[j * 2 + 1] / cell | 0);
+            counts[cy * gw + cx]++;
+        }
+        starts[0] = 0;
+        for (let k = 0; k < gn; k++) starts[k + 1] = starts[k] + counts[k];
+        cursor.set(starts.subarray(0, gn));
+        for (let j = 0; j < n; j++) {
+            const cx = Math.min(gw - 1, points[j * 2] / cell | 0);
+            const cy = Math.min(gh - 1, points[j * 2 + 1] / cell | 0);
+            order[cursor[cy * gw + cx]++] = j;
+        }
+
+        /* accumulate weighted centroids: every inked pixel votes for
+           its nearest stipple (exact — expanding ring with distance bound) */
+        sx.fill(0); sy.fill(0); sw.fill(0);
+        for (let py = 0; py < dh; py++) {
+            const rowOff = py * dw, yq = py + 0.5;
+            const gy = Math.min(gh - 1, py / cell | 0);
+            for (let px = 0; px < dw; px++) {
+                const wgt = density[rowOff + px];
+                if (wgt === 0) continue;
+                const xq = px + 0.5;
+                const gx = Math.min(gw - 1, px / cell | 0);
+                let best = -1, bestD = Infinity;
+                for (let ring = 0; ring <= maxRing; ring++) {
+                    const x0 = gx - ring, x1 = gx + ring;
+                    const y0 = gy - ring, y1 = gy + ring;
+                    for (let cy = y0; cy <= y1; cy++) {
+                        if (cy < 0 || cy >= gh) continue;
+                        const edgeRow = (cy === y0 || cy === y1);
+                        const step = edgeRow ? 1 : (x1 - x0 || 1);
+                        for (let cx = x0; cx <= x1; cx += step) {
+                            if (cx < 0 || cx >= gw) continue;
+                            const k = cy * gw + cx, end = starts[k + 1];
+                            for (let o = starts[k]; o < end; o++) {
+                                const j = order[o];
+                                const ddx = points[j * 2] - xq;
+                                const ddy = points[j * 2 + 1] - yq;
+                                const d2 = ddx * ddx + ddy * ddy;
+                                if (d2 < bestD) { bestD = d2; best = j; }
+                            }
+                        }
+                    }
+                    if (best !== -1) {
+                        const safe = ring * cell;   /* anything beyond is ≥ ring·cell away */
+                        if (bestD <= safe * safe) break;
+                    }
+                }
+                sx[best] += xq * wgt; sy[best] += yq * wgt; sw[best] += wgt;
+            }
+        }
+
+        /* move each point to its weighted centroid; starved points re-seed */
+        for (let j = 0; j < n; j++) {
+            if (sw[j] > 0) {
+                points[j * 2] = sx[j] / sw[j];
+                points[j * 2 + 1] = sy[j] / sw[j];
+            } else {
+                for (let t = 0; t < 60; t++) {
+                    const x = r() * dw, y = r() * dh;
+                    if (r() < density[(y | 0) * dw + (x | 0)]) {
+                        points[j * 2] = x; points[j * 2 + 1] = y; break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* ================= rendering =================
+   Dot radius is weighted by the darkness beneath the settled point. */
+function renderTo(g, W, H) {
+    const scale = W / dw;
+    g.fillStyle = state.invert ? '#111111' : '#ffffff';
+    g.fillRect(0, 0, W, H);
+    g.fillStyle = state.invert ? '#ffffff' : '#111111';
+    const base = 0.40 * Math.sqrt(dw * dh / pn) * scale * state.size;
+    const TAU = Math.PI * 2;
+    g.beginPath();
+    for (let j = 0; j < pn; j++) {
+        const x = points[j * 2], y = points[j * 2 + 1];
+        const xi = Math.min(dw - 1, Math.max(0, x | 0));
+        const yi = Math.min(dh - 1, Math.max(0, y | 0));
+        const d = density[yi * dw + xi];
+        const rad = base * (0.25 + 0.75 * Math.sqrt(d));
+        if (rad <= 0) continue;
+        g.moveTo(x * scale + rad, y * scale);
+        g.arc(x * scale, y * scale, rad, 0, TAU);
+    }
+    g.fill();
+}
+
+function render() {
+    const long = 1240;
+    const scale = long / Math.max(dw, dh);
+    cv.width = Math.round(dw * scale);
+    cv.height = Math.round(dh * scale);
+    renderTo(ctx, cv.width, cv.height);
+}
+
+/* ================= procedural study =================
+   The canonical stippling test object: a lit sphere on a shadowed
+   ground. Deterministic — the tool never opens empty. */
+function makeStudy() {
+    const w = 960, h = 720;
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+
+    const bg = g.createLinearGradient(0, 0, 0, h);
+    bg.addColorStop(0, '#f6f6f3');
+    bg.addColorStop(0.58, '#dededa');
+    bg.addColorStop(0.62, '#c9c9c3');
+    bg.addColorStop(1, '#b0b0a9');
+    g.fillStyle = bg;
+    g.fillRect(0, 0, w, h);
+
+    g.save();
+    g.translate(w * 0.50, h * 0.80);
+    g.scale(1, 0.30);
+    const sh = g.createRadialGradient(0, 0, 0, 0, 0, w * 0.30);
+    sh.addColorStop(0, 'rgba(17,17,17,0.60)');
+    sh.addColorStop(0.55, 'rgba(17,17,17,0.26)');
+    sh.addColorStop(1, 'rgba(17,17,17,0)');
+    g.fillStyle = sh;
+    g.fillRect(-w * 0.32, -w * 0.32, w * 0.64, w * 0.64);
+    g.restore();
+
+    const R = h * 0.30, cx = w * 0.5, cy = h * 0.50;
+    const sp = g.createRadialGradient(cx - R * 0.38, cy - R * 0.42, R * 0.08, cx, cy, R);
+    sp.addColorStop(0, '#fdfdfc');
+    sp.addColorStop(0.35, '#d9d9d4');
+    sp.addColorStop(0.70, '#8a8a84');
+    sp.addColorStop(0.92, '#3c3c37');
+    sp.addColorStop(1, '#2b2b27');
+    g.fillStyle = sp;
+    g.beginPath();
+    g.arc(cx, cy, R, 0, Math.PI * 2);
+    g.fill();
+
+    return c;
+}
+
+/* ================= chrome wiring ================= */
+const fmt = v => v.toLocaleString('en-US');
+const contrastSlope = () => Math.pow(2, state.contrast / 50);
+
+function updateVals() {
+    $('dots-val').textContent = fmt(state.dots);
+    $('contrast-val').textContent = '×' + contrastSlope().toFixed(2);
+    $('relax-val').textContent = '×' + state.relax;
+    $('size-val').textContent = '×' + state.size.toFixed(2);
+}
+function updatePlacard() {
+    $('placard-line').innerHTML =
+        'SEED <span class="accent">' + state.seed + '</span>' +
+        ' · REJECTION + LLOYD ×' + state.relax +
+        ' · ' + fmt(state.dots) + ' DOTS · 2026';
+    $('fname').textContent = exportName('stipple-field', state.seed);
+}
+function updateSourceReadout() {
+    $('source-readout').textContent = sourceName + ' · ' + srcW + '×' + srcH + 'px';
+}
+
+let timer = null;
+function scheduleRecompute() {
+    $('status').textContent = 'computing —';
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+        /* let the status paint before the synchronous solve blocks */
+        requestAnimationFrame(() => setTimeout(runCompute, 0));
+    }, 140);
+}
+function runCompute() {
+    const t0 = performance.now();
+    compute();
+    render();
+    $('status').textContent = Math.round(performance.now() - t0) + ' ms';
+    updatePlacard();
+}
+
+/* sliders that reshape the field — full recompute */
+$('dots').addEventListener('input', e => {
+    state.dots = +e.target.value; updateVals(); scheduleRecompute();
+});
+$('contrast').addEventListener('input', e => {
+    state.contrast = +e.target.value; updateVals(); scheduleRecompute();
+});
+$('relax').addEventListener('input', e => {
+    state.relax = +e.target.value; updateVals(); scheduleRecompute();
+});
+
+/* ink controls — re-render only, positions stand */
+$('size').addEventListener('input', e => {
+    state.size = +e.target.value / 100; updateVals(); render();
+});
+$('invert').addEventListener('change', e => {
+    state.invert = e.target.checked; render();
+});
+
+/* seed — typed or walked, always deterministic */
+$('seed').addEventListener('change', e => {
+    const v = parseInt(e.target.value, 10);
+    if (Number.isFinite(v) && v >= 0) {
+        state.seed = v; walker = v || 4271;
+        updatePlacard(); scheduleRecompute();
+    } else {
+        e.target.value = state.seed;
+    }
+});
+$('reroll').addEventListener('click', () => {
+    walker = (walker * 48271) % 2147483647;
+    if (walker <= 0) walker = 4271;
+    state.seed = 1000 + walker % 9000;
+    $('seed').value = state.seed;
+    updatePlacard(); scheduleRecompute();
+});
+
+/* source — upload or drop */
+function loadFile(f) {
+    if (!f || !/^image\//.test(f.type)) return;
+    const url = URL.createObjectURL(f);
+    const img = new Image();
+    img.onload = () => {
+        source = img;
+        sourceName = f.name;
+        srcW = img.naturalWidth; srcH = img.naturalHeight;
+        updateSourceReadout();
+        scheduleRecompute();
+        URL.revokeObjectURL(url);
+    };
+    img.src = url;
+}
+$('upload-btn').addEventListener('click', () => $('file').click());
+$('file').addEventListener('change', e => loadFile(e.target.files[0]));
+
+const stage = $('stage'), container = $('canvas-container');
+['dragenter', 'dragover'].forEach(ev => stage.addEventListener(ev, e => {
+    e.preventDefault(); container.classList.add('dropping');
+}));
+['dragleave', 'drop'].forEach(ev => stage.addEventListener(ev, e => {
+    e.preventDefault(); container.classList.remove('dropping');
+}));
+stage.addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
+
+/* export — 2× pixel density, seed in the filename */
+$('download').addEventListener('click', () => {
+    const long = 2480;
+    const scale = long / Math.max(dw, dh);
+    const oc = document.createElement('canvas');
+    oc.width = Math.round(dw * scale);
+    oc.height = Math.round(dh * scale);
+    renderTo(oc.getContext('2d'), oc.width, oc.height);
+    oc.toBlob(b => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(b);
+        a.download = exportName('stipple-field', state.seed);
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    }, 'image/png');
+});
+
+/* ================= init ================= */
+source = makeStudy();
+srcW = source.width; srcH = source.height;
+updateVals();
+updatePlacard();
+updateSourceReadout();
+runCompute();
+</script>
+</body>
+</html>

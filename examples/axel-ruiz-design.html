@@ -1,0 +1,741 @@
+<!doctype html>
+<!--
+    AXEL RUIZ DESIGN — STUDIO LANDING
+    One page, one file. Austin, Texas. 2026.
+
+    The interface is the gallery, the canvas is the art: chrome recedes into
+    typography and hairline rules so the generated work holds the room. The page
+    is divided into rooms by strong 1px rules; each room carries an index and an
+    engraved title; every work hangs above a museum placard naming its seed,
+    its algorithm, and its year.
+
+    Four seeded typographic systems hang here, all implemented inline:
+
+      TERRAIN STUDY      Poisson-disk stipple (Bridson) whose local radius is
+                         driven by glyph luminance — the letterform supplies
+                         the terrain, blue-noise sampling walks it. Live:
+                         the seed is editable, the edition downloadable.
+      MERIDIAN RIDGE     Scanline displacement — 62 horizontal meridians are
+                         lifted where they cross the ink of a glyph, with
+                         paper-fill occlusion and a seeded jitter walk.
+      SPECIMEN CENSUS    A 12×12 lattice of glyphs sized by seeded Gaussians
+                         and shuffled by seeded Fisher–Yates. One glyph in the
+                         census takes the accent — the lone bird in the canopy.
+      COUNTERFORM MESH   Bowyer–Watson Delaunay triangulation over a
+                         density-weighted Poisson-disk sample; edges darken
+                         where both endpoints land inside the glyph.
+
+    Reproducibility contract: composition never touches Math.random(). All
+    chance flows from mulberry32(seed) — the same seed yields the same frame,
+    exactly. Palette is ink, paper, two greys, and one forest-green accent
+    held in reserve. No border-radius, no box-shadow, no gradient as
+    decoration. Opens from the filesystem; no build, no server.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Axel Ruiz Design — Generative Typography — Austin, TX</title>
+<meta name="description" content="Axel Ruiz Design is a one-person studio in Austin, Texas, making generative typographic work: seeded systems, real algorithms, single-file delivery.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+    :root {
+        --ink: #111111;
+        --paper: #ffffff;
+        --line: #e4e4e1;
+        --line-strong: #111111;
+        --mute: #8a8a86;
+        --accent: #1f4a2b;
+        --accent-bright: #2d6b3f;
+        --grotesque: 'Helvetica Neue', 'Inter', Arial, sans-serif;
+        --mono: 'Space Mono', 'Courier New', monospace;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+        font-family: var(--grotesque);
+        background: var(--paper);
+        color: var(--ink);
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+    }
+
+    /* ---- Topbar ---- */
+    .topbar {
+        display: flex; align-items: baseline; justify-content: space-between;
+        gap: 24px;
+        padding: 18px 28px;
+        border-bottom: 1px solid var(--line-strong);
+    }
+    .brand { font-size: 13px; font-weight: 700; letter-spacing: 0.34em; text-transform: uppercase; white-space: nowrap; }
+    .nav { display: flex; gap: 26px; }
+    .nav a {
+        font-size: 10.5px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase;
+        color: var(--ink); text-decoration: none;
+        border-bottom: 1px solid transparent;
+        transition: border-color 0.14s, color 0.14s;
+    }
+    .nav a:hover { border-color: var(--ink); }
+    .topbar .meta {
+        font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.18em;
+        text-transform: uppercase; color: var(--mute); white-space: nowrap;
+    }
+    @media (max-width: 880px) { .topbar .meta { display: none; } }
+    @media (max-width: 560px) { .nav { display: none; } }
+
+    /* ---- Rooms ---- */
+    .wrap { max-width: 1160px; margin: 0 auto; padding: 0 28px; }
+    .room { padding: 72px 0; }
+    .room + .room, footer { border-top: 1px solid var(--line-strong); }
+    .room-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 40px; }
+    .room-head .idx { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--accent); }
+    .room-head h2 { font-size: 11px; font-weight: 600; letter-spacing: 0.26em; text-transform: uppercase; }
+
+    /* ---- Hero ---- */
+    .hero { padding: 48px 0 56px; }
+    .frame { border: 1px solid var(--line-strong); background: var(--paper); line-height: 0; }
+    .frame canvas { display: block; width: 100%; height: auto; }
+
+    .placard {
+        border-top: 1px solid var(--line);
+        margin-top: 16px; padding-top: 14px;
+        display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    }
+    .placard-title { font-size: 13px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; white-space: nowrap; }
+    .placard-line { font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em; color: var(--mute); }
+    .placard-line .accent { color: var(--accent); }
+
+    .hero-controls { margin-left: auto; display: flex; gap: 8px; align-items: stretch; }
+    @media (max-width: 720px) { .hero-controls { margin-left: 0; width: 100%; } }
+
+    .seed-input {
+        width: 96px; background: var(--paper); border: 1px solid var(--line-strong);
+        padding: 9px 8px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.1em;
+        text-align: center; color: var(--ink);
+    }
+    .seed-input:focus { outline: none; border-color: var(--accent); }
+
+    .btn {
+        display: inline-block;
+        background: var(--paper); color: var(--ink); border: 1px solid var(--ink);
+        padding: 9px 16px;
+        font-family: var(--grotesque); font-size: 10.5px; font-weight: 600;
+        letter-spacing: 0.18em; text-transform: uppercase; cursor: pointer;
+        transition: background 0.14s, color 0.14s, border-color 0.14s;
+    }
+    .btn:hover { background: var(--ink); color: var(--paper); }
+    .btn.accent { border-color: var(--accent); color: var(--accent); }
+    .btn.accent:hover { background: var(--accent); color: var(--paper); }
+
+    /* ---- Studio statement ---- */
+    .lead {
+        font-size: 26px; font-weight: 400; line-height: 1.45;
+        max-width: 30em; margin-bottom: 28px; letter-spacing: -0.005em;
+    }
+    .lead em { font-style: italic; }
+    .body-copy {
+        font-size: 15px; line-height: 1.75; color: var(--ink);
+        max-width: 44em; margin-bottom: 16px;
+    }
+    .body-copy:last-child { margin-bottom: 0; }
+
+    /* ---- Works ---- */
+    .works-grid {
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px;
+    }
+    @media (max-width: 900px) { .works-grid { grid-template-columns: 1fr; } }
+    .work { display: block; }
+    .work .placard { margin-top: 12px; padding-top: 12px; display: block; }
+    .work .placard-title { display: block; margin-bottom: 5px; }
+    .work .placard-line { display: block; }
+
+    /* ---- Method ---- */
+    .method-row {
+        display: grid; grid-template-columns: 56px 240px 1fr; gap: 20px;
+        padding: 20px 0; border-top: 1px solid var(--line);
+        align-items: baseline;
+    }
+    .method-row:last-child { border-bottom: 1px solid var(--line); }
+    .method-num { font-family: var(--mono); font-size: 11px; color: var(--ink); font-weight: 700; }
+    .method-name { font-size: 11px; font-weight: 600; letter-spacing: 0.2em; text-transform: uppercase; }
+    .method-desc { font-size: 13.5px; line-height: 1.65; color: var(--ink); max-width: 48em; }
+    .method-desc code { font-family: var(--mono); font-size: 12px; }
+    @media (max-width: 720px) {
+        .method-row { grid-template-columns: 40px 1fr; }
+        .method-desc { grid-column: 2; }
+    }
+
+    /* ---- Contact ---- */
+    .contact-row {
+        display: grid; grid-template-columns: 240px 1fr; gap: 20px;
+        padding: 18px 0; border-top: 1px solid var(--line);
+        align-items: baseline;
+    }
+    .contact-row:last-child { border-bottom: 1px solid var(--line); }
+    .contact-label { font-size: 11px; font-weight: 600; letter-spacing: 0.2em; text-transform: uppercase; }
+    .contact-val { font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; color: var(--ink); }
+    .contact-val a {
+        color: var(--ink); text-decoration: none;
+        border-bottom: 1px solid var(--ink);
+        transition: color 0.14s, border-color 0.14s;
+    }
+    .contact-val a:hover { color: var(--accent-bright); border-color: var(--accent-bright); }
+    @media (max-width: 720px) { .contact-row { grid-template-columns: 1fr; gap: 6px; } }
+
+    /* ---- Footer ---- */
+    footer {
+        display: flex; justify-content: space-between; align-items: baseline; gap: 16px;
+        padding: 20px 28px; flex-wrap: wrap;
+    }
+    footer .f {
+        font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em;
+        text-transform: uppercase; color: var(--mute);
+    }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="brand">Axel Ruiz Design</div>
+    <nav class="nav">
+        <a href="#works">Works</a>
+        <a href="#method">Method</a>
+        <a href="#contact">Contact</a>
+    </nav>
+    <div class="meta">Generative Typography — Austin, TX</div>
+</header>
+
+<noscript><div style="font-family: 'Space Mono', monospace; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: #8a8a86; padding: 20px 28px;">JavaScript is off — the works on this page are drawn live from a seed and cannot hang without it.</div></noscript>
+
+<!-- ROOM 0 — THE LIVE SYSTEM -->
+<section class="room hero">
+    <div class="wrap">
+        <div class="frame"><canvas id="hero-canvas" width="2400" height="900" aria-label="Terrain Study — the studio wordmark rendered as a Poisson-disk stipple field"></canvas></div>
+        <div class="placard">
+            <div>
+                <span class="placard-title">Terrain Study</span>
+            </div>
+            <div class="placard-line">POISSON-DISK STIPPLE (BRIDSON) — SEED <span class="accent" id="seed-echo">4271</span> — 2400×900 — 2026</div>
+            <div class="hero-controls">
+                <input class="seed-input" id="seed-input" value="4271" inputmode="numeric" aria-label="Seed">
+                <button class="btn" id="btn-reseed" type="button">Reseed</button>
+                <button class="btn accent" id="btn-png" type="button">PNG</button>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ROOM 01 — STUDIO -->
+<section class="room" id="studio">
+    <div class="wrap">
+        <div class="room-head"><span class="idx">01</span><h2>Studio</h2></div>
+        <p class="lead">Axel Ruiz Design is a one-person studio in Austin, Texas, making typography that is <em>grown, not set</em>.</p>
+        <p class="body-copy">Each piece begins as a system — a seed, an algorithm, a handful of constraints — and ends as an edition: exact, reproducible, and built from nothing but type. The letterform supplies the terrain; the algorithm walks it.</p>
+        <p class="body-copy">The instruments are the ones named on the placards. Nothing on this page is an image: every work below is drawn live, in this file, from its seed.</p>
+    </div>
+</section>
+
+<!-- ROOM 02 — SELECTED WORKS -->
+<section class="room" id="works">
+    <div class="wrap">
+        <div class="room-head"><span class="idx">02</span><h2>Selected Works</h2></div>
+        <div class="works-grid">
+            <figure class="work">
+                <div class="frame"><canvas id="work-meridian" width="900" height="900" aria-label="Meridian Ridge — horizontal scanlines displaced by the ink of a glyph"></canvas></div>
+                <figcaption class="placard">
+                    <span class="placard-title">Meridian Ridge</span>
+                    <span class="placard-line">SCANLINE DISPLACEMENT — SEED 1187 — 2026</span>
+                </figcaption>
+            </figure>
+            <figure class="work">
+                <div class="frame"><canvas id="work-census" width="900" height="900" aria-label="Specimen Census — a shuffled lattice of glyphs at seeded sizes"></canvas></div>
+                <figcaption class="placard">
+                    <span class="placard-title">Specimen Census</span>
+                    <span class="placard-line">SEEDED FISHER–YATES LATTICE — SEED 2440 — 2026</span>
+                </figcaption>
+            </figure>
+            <figure class="work">
+                <div class="frame"><canvas id="work-mesh" width="900" height="900" aria-label="Counterform Mesh — a Delaunay triangulation condensing around a glyph"></canvas></div>
+                <figcaption class="placard">
+                    <span class="placard-title">Counterform Mesh</span>
+                    <span class="placard-line">BOWYER–WATSON DELAUNAY — SEED 3319 — 2026</span>
+                </figcaption>
+            </figure>
+        </div>
+    </div>
+</section>
+
+<!-- ROOM 03 — METHOD -->
+<section class="room" id="method">
+    <div class="wrap">
+        <div class="room-head"><span class="idx">03</span><h2>Method</h2></div>
+        <div class="method-row">
+            <div class="method-num">01</div>
+            <div class="method-name">Seeded, Always</div>
+            <div class="method-desc">Composition never touches <code>Math.random()</code>. All chance flows from one integer through a seeded generator — the same seed yields the same frame, exactly. Exploring the work is navigation, not gambling.</div>
+        </div>
+        <div class="method-row">
+            <div class="method-num">02</div>
+            <div class="method-name">Real Algorithms</div>
+            <div class="method-desc">Bridson's Poisson-disk sampling, Bowyer–Watson Delaunay triangulation, seeded Fisher–Yates, Box–Muller Gaussians — implemented inline, named on the placard. The craft should read in the code as clearly as on the wall.</div>
+        </div>
+        <div class="method-row">
+            <div class="method-num">03</div>
+            <div class="method-name">One File</div>
+            <div class="method-desc">Every work ships as a single HTML file — no build, no server, no dependencies that rot. It opens from the filesystem today and will still open in twenty years. This page is built the same way.</div>
+        </div>
+    </div>
+</section>
+
+<!-- ROOM 04 — CONTACT -->
+<section class="room" id="contact">
+    <div class="wrap">
+        <div class="room-head"><span class="idx">04</span><h2>Contact</h2></div>
+        <div class="contact-row">
+            <div class="contact-label">Commissions</div>
+            <div class="contact-val">OPEN — FALL 2026</div>
+        </div>
+        <div class="contact-row">
+            <div class="contact-label">Email</div>
+            <div class="contact-val"><a href="mailto:studio@axelruizdesign.com">studio@axelruizdesign.com</a></div>
+        </div>
+        <div class="contact-row">
+            <div class="contact-label">Studio</div>
+            <div class="contact-val">AUSTIN, TEXAS — BY APPOINTMENT</div>
+        </div>
+    </div>
+</section>
+
+<footer>
+    <div class="f">© 2026 Axel Ruiz Design</div>
+    <div class="f">Seeded — Single File — No Build</div>
+</footer>
+
+<script>
+/* ================================================================
+   GENERATIVE KIT — seeded PRNG, Poisson-disk (Bridson), helpers.
+   Contract: composition code never calls Math.random().
+   ================================================================ */
+
+function mulberry32(seed) {
+    let a = seed >>> 0;
+    return function () {
+        a |= 0; a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+const rng = {
+    range: (r, lo, hi) => lo + r() * (hi - lo),
+    int:   (r, lo, hi) => Math.floor(lo + r() * (hi - lo + 1)),
+    pick:  (r, arr) => arr[Math.floor(r() * arr.length)],
+    shuffle: (r, arr) => {
+        for (let i = arr.length - 1; i > 0; i--) {
+            const j = Math.floor(r() * (i + 1));
+            [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+    },
+    gaussian: (r, mean = 0, sd = 1) => {
+        let u = 0, v = 0;
+        while (u === 0) u = r();
+        while (v === 0) v = r();
+        return mean + sd * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    },
+};
+
+/* Poisson-disk sampling — Bridson's algorithm. Blue-noise spacing; optional
+   densityFn(x,y) in [0,1] locally scales minDist (1 = sparsest). The grid
+   cell is sized to the SMALLEST possible local distance so it always holds
+   at most one point — sizing it to minDist lets dense-region points silently
+   overwrite one another and the sampler densifies without bound. */
+function poissonDisk(r, w, h, minDist, k = 30, densityFn = null) {
+    const dMin = densityFn ? minDist * 0.35 : minDist;
+    const cell = dMin / Math.SQRT2;
+    const gw = Math.ceil(w / cell), gh = Math.ceil(h / cell);
+    const grid = new Array(gw * gh).fill(-1);
+    const pts = [], active = [];
+
+    const localDist = (x, y) => densityFn
+        ? minDist * (0.35 + 0.65 * densityFn(x, y))
+        : minDist;
+
+    const fits = (x, y) => {
+        if (x < 0 || y < 0 || x >= w || y >= h) return false;
+        const d = localDist(x, y);
+        const gx = Math.floor(x / cell), gy = Math.floor(y / cell);
+        const reach = Math.ceil(d / cell) + 1;
+        for (let j = Math.max(0, gy - reach); j <= Math.min(gh - 1, gy + reach); j++) {
+            for (let i = Math.max(0, gx - reach); i <= Math.min(gw - 1, gx + reach); i++) {
+                const idx = grid[j * gw + i];
+                if (idx !== -1) {
+                    const p = pts[idx];
+                    if ((p.x - x) ** 2 + (p.y - y) ** 2 < d * d) return false;
+                }
+            }
+        }
+        return true;
+    };
+
+    const add = (x, y) => {
+        const p = { x, y };
+        pts.push(p);
+        active.push(pts.length - 1);
+        grid[Math.floor(y / cell) * gw + Math.floor(x / cell)] = pts.length - 1;
+    };
+
+    add(rng.range(r, 0, w), rng.range(r, 0, h));
+
+    while (active.length) {
+        const ai = Math.floor(r() * active.length);
+        const p = pts[active[ai]];
+        let placed = false;
+        for (let n = 0; n < k; n++) {
+            const d = localDist(p.x, p.y);
+            const ang = r() * Math.PI * 2;
+            const rad = d * (1 + r());
+            const x = p.x + Math.cos(ang) * rad, y = p.y + Math.sin(ang) * rad;
+            if (fits(x, y)) { add(x, y); placed = true; break; }
+        }
+        if (!placed) active.splice(ai, 1);
+    }
+    return pts;
+}
+
+function exportName(title, seed) {
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    return `${slug}_seed-${seed}.png`;
+}
+
+/* ================================================================
+   SHARED — glyph luminance masks, palette, small utilities.
+   ================================================================ */
+
+const INK = '#111111';
+const PAPER = '#ffffff';
+const ACCENT = '#1f4a2b';
+const TAU = Math.PI * 2;
+const DISPLAY = '"Helvetica Neue", "Inter", Arial, sans-serif';
+
+/* Rasterize a drawing into an offscreen canvas; expose alpha as a 0..1 field. */
+function inkMask(w, h, draw) {
+    const oc = document.createElement('canvas');
+    oc.width = w; oc.height = h;
+    const c = oc.getContext('2d', { willReadFrequently: true });
+    c.fillStyle = '#000';
+    draw(c);
+    const d = c.getImageData(0, 0, w, h).data;
+    return {
+        at(x, y) {
+            x |= 0; y |= 0;
+            if (x < 0 || y < 0 || x >= w || y >= h) return 0;
+            return d[(y * w + x) * 4 + 3] / 255;
+        }
+    };
+}
+
+/* Box-blur a 1-D array (used to soften scanline displacement). */
+function smooth1d(arr, radius) {
+    const out = new Array(arr.length);
+    for (let i = 0; i < arr.length; i++) {
+        let s = 0, n = 0;
+        for (let j = Math.max(0, i - radius); j <= Math.min(arr.length - 1, i + radius); j++) { s += arr[j]; n++; }
+        out[i] = s / n;
+    }
+    return out;
+}
+
+/* ================================================================
+   HERO — TERRAIN STUDY
+   Poisson-disk stipple (Bridson); glyph luminance drives local radius.
+   Drawn in a 1600×600 design space scaled 1.5× for a 2400×900 edition.
+   ================================================================ */
+
+const heroCanvas = document.getElementById('hero-canvas');
+const seedInput = document.getElementById('seed-input');
+const seedEcho = document.getElementById('seed-echo');
+let heroSeed = 4271;
+
+function renderHero() {
+    const W = 1600, H = 600, SCALE = 1.5;
+    const ctx = heroCanvas.getContext('2d');
+    const r = mulberry32(heroSeed);
+
+    const mask = inkMask(W, H, c => {
+        let size = 320;
+        const set = s => { c.font = `900 ${s}px ${DISPLAY}`; };
+        set(size);
+        while (c.measureText('AXEL RUIZ').width > W - 180 && size > 60) { size -= 6; set(size); }
+        c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillText('AXEL RUIZ', W / 2, H / 2 + size * 0.04);
+    });
+
+    ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+    ctx.fillStyle = PAPER;
+    ctx.fillRect(0, 0, W, H);
+
+    const pts = poissonDisk(r, W, H, 13.5, 30, (x, y) => 1 - 0.87 * mask.at(x, y));
+
+    for (const p of pts) {
+        const ink = mask.at(p.x, p.y);
+        if (ink > 0.5) {
+            /* the lone birds: a scarce few glyph dots take the accent */
+            ctx.fillStyle = r() < 0.006 ? ACCENT : INK;
+            const rad = 1.4 + 1.4 * r() + 1.0 * ink;
+            ctx.beginPath(); ctx.arc(p.x, p.y, rad, 0, TAU); ctx.fill();
+        } else if (r() < 0.8) {
+            ctx.fillStyle = 'rgba(17,17,17,0.26)';
+            ctx.beginPath(); ctx.arc(p.x, p.y, 1.0, 0, TAU); ctx.fill();
+        }
+    }
+
+    seedEcho.textContent = String(heroSeed);
+    seedInput.value = String(heroSeed);
+}
+
+function applySeedFromInput() {
+    const v = parseInt(seedInput.value, 10);
+    if (Number.isFinite(v) && v >= 1 && v <= 99999) {
+        heroSeed = v;
+        renderHero();
+    } else {
+        seedInput.value = String(heroSeed);
+    }
+}
+
+seedInput.addEventListener('change', applySeedFromInput);
+seedInput.addEventListener('keydown', e => { if (e.key === 'Enter') { applySeedFromInput(); seedInput.blur(); } });
+
+/* Reseed is navigation, not gambling: a deterministic walk through seed-space. */
+document.getElementById('btn-reseed').addEventListener('click', () => {
+    heroSeed = 1 + Math.floor(mulberry32((heroSeed ^ 0x9E3779B9) >>> 0)() * 99998);
+    renderHero();
+});
+
+document.getElementById('btn-png').addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.download = exportName('terrain study', heroSeed);
+    a.href = heroCanvas.toDataURL('image/png');
+    a.click();
+});
+
+/* ================================================================
+   WORK I — MERIDIAN RIDGE (seed 1187)
+   Horizontal meridians lifted by glyph ink; paper-fill occlusion.
+   ================================================================ */
+
+function renderMeridian(canvas, seed) {
+    const S = 900;
+    const ctx = canvas.getContext('2d');
+    const r = mulberry32(seed);
+
+    const mask = inkMask(S, S, c => {
+        c.font = `900 640px ${DISPLAY}`;
+        c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillText('A', S / 2, S / 2 + 42);
+    });
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = PAPER;
+    ctx.fillRect(0, 0, S, S);
+
+    const LINES = 62, Y0 = 130, Y1 = 800, X0 = 70, X1 = 830, STEP = 3, AMP = 48;
+
+    for (let i = 0; i < LINES; i++) {
+        const yb = Y0 + (Y1 - Y0) * i / (LINES - 1);
+
+        const xs = [], raw = [];
+        for (let x = X0; x <= X1; x += STEP) { xs.push(x); raw.push(mask.at(x, yb)); }
+        const sm = smooth1d(smooth1d(raw, 5), 5);
+
+        /* seeded jitter walk gives the line a hand */
+        let v = 0;
+        const pts = [];
+        for (let j = 0; j < xs.length; j++) {
+            v += (r() - 0.5) * 1.5; v *= 0.9;
+            const edge = Math.min(1, (xs[j] - X0) / 60, (X1 - xs[j]) / 60);
+            pts.push([xs[j], yb - AMP * sm[j] * edge + v * edge]);
+        }
+
+        /* occlusion: fill paper beneath the curve, then stroke it */
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0], pts[0][1]);
+        for (const p of pts) ctx.lineTo(p[0], p[1]);
+        ctx.lineTo(X1, S); ctx.lineTo(X0, S); ctx.closePath();
+        ctx.fillStyle = PAPER; ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0], pts[0][1]);
+        for (const p of pts) ctx.lineTo(p[0], p[1]);
+        ctx.strokeStyle = INK; ctx.lineWidth = 1.4; ctx.stroke();
+    }
+}
+
+/* ================================================================
+   WORK II — SPECIMEN CENSUS (seed 2440)
+   12×12 lattice; seeded Gaussian sizes; one accent glyph.
+   ================================================================ */
+
+function renderCensus(canvas, seed) {
+    const S = 900;
+    const ctx = canvas.getContext('2d');
+    const r = mulberry32(seed);
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = PAPER;
+    ctx.fillRect(0, 0, S, S);
+
+    const POOL = 'AXELRUIZDESGNAUSTX1978&?#*'.split('');
+    const N = 12, M = 78;
+    const cw = (S - 2 * M) / N;
+    const accentCell = rng.int(r, 0, N * N - 1);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    let idx = 0;
+    for (let gy = 0; gy < N; gy++) {
+        for (let gx = 0; gx < N; gx++, idx++) {
+            const ch = rng.pick(r, POOL);
+            const size = Math.max(13, Math.min(80, rng.gaussian(r, 36, 16)));
+            const wgt = r() < 0.3 ? 400 : 700;
+            const jy = rng.gaussian(r, 0, 3);
+            ctx.fillStyle = idx === accentCell ? ACCENT
+                : (r() < 0.16 ? 'rgba(17,17,17,0.26)' : INK);
+            ctx.font = `${wgt} ${size.toFixed(1)}px ${DISPLAY}`;
+            ctx.fillText(ch, M + cw * (gx + 0.5), M + cw * (gy + 0.5) + jy);
+        }
+    }
+}
+
+/* ================================================================
+   WORK III — COUNTERFORM MESH (seed 3319)
+   Bowyer–Watson Delaunay over a density-weighted Poisson sample.
+   ================================================================ */
+
+function circumcircle(a, b, c) {
+    const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+    if (Math.abs(d) < 1e-9) return { x: 0, y: 0, r2: -1 };  /* degenerate: never contains */
+    const a2 = a.x * a.x + a.y * a.y, b2 = b.x * b.x + b.y * b.y, c2 = c.x * c.x + c.y * c.y;
+    const ux = (a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / d;
+    const uy = (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d;
+    const dx = a.x - ux, dy = a.y - uy;
+    return { x: ux, y: uy, r2: dx * dx + dy * dy };
+}
+
+/* Bowyer–Watson incremental Delaunay. Returns triangles as index triples. */
+function delaunay(pts) {
+    const n = pts.length;
+    const P = pts.concat([
+        { x: -10000, y: -10000 },
+        { x:  10900, y: -10000 },
+        { x:    450, y:  10900 },
+    ]);
+    let tris = [[n, n + 1, n + 2]];
+    let cc = [circumcircle(P[n], P[n + 1], P[n + 2])];
+
+    for (let i = 0; i < n; i++) {
+        const p = P[i];
+        const bad = [];
+        for (let t = 0; t < tris.length; t++) {
+            const c = cc[t];
+            const dx = p.x - c.x, dy = p.y - c.y;
+            if (c.r2 > 0 && dx * dx + dy * dy < c.r2) bad.push(t);
+        }
+
+        /* boundary polygon: edges of bad triangles not shared by two of them */
+        const edges = new Map();
+        for (const t of bad) {
+            const [a, b, c3] = tris[t];
+            for (const [u, v] of [[a, b], [b, c3], [c3, a]]) {
+                const k = Math.min(u, v) + '_' + Math.max(u, v);
+                const e = edges.get(k);
+                if (e) e.count++;
+                else edges.set(k, { u, v, count: 1 });
+            }
+        }
+
+        for (let j = bad.length - 1; j >= 0; j--) {
+            tris.splice(bad[j], 1);
+            cc.splice(bad[j], 1);
+        }
+
+        for (const { u, v, count } of edges.values()) {
+            if (count === 1) {
+                tris.push([u, v, i]);
+                cc.push(circumcircle(P[u], P[v], P[i]));
+            }
+        }
+    }
+
+    return tris.filter(t => t[0] < n && t[1] < n && t[2] < n);
+}
+
+function renderMesh(canvas, seed) {
+    const S = 900;
+    const ctx = canvas.getContext('2d');
+    const r = mulberry32(seed);
+
+    const mask = inkMask(S, S, c => {
+        c.font = `900 660px ${DISPLAY}`;
+        c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillText('R', S / 2, S / 2 + 44);
+    });
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = PAPER;
+    ctx.fillRect(0, 0, S, S);
+
+    const pts = poissonDisk(r, S, S, 34, 30, (x, y) => 1 - 0.8 * mask.at(x, y));
+    const tris = delaunay(pts);
+
+    /* dedupe edges, classify by how many endpoints land in the glyph */
+    const seen = new Set();
+    ctx.lineCap = 'round';
+    for (const [a, b, c] of tris) {
+        for (const [u, v] of [[a, b], [b, c], [c, a]]) {
+            const k = Math.min(u, v) + '_' + Math.max(u, v);
+            if (seen.has(k)) continue;
+            seen.add(k);
+            const p = pts[u], q = pts[v];
+            const inP = mask.at(p.x, p.y) > 0.5, inQ = mask.at(q.x, q.y) > 0.5;
+            if (inP && inQ) { ctx.strokeStyle = 'rgba(17,17,17,0.92)'; ctx.lineWidth = 1.3; }
+            else if (inP || inQ) { ctx.strokeStyle = 'rgba(17,17,17,0.22)'; ctx.lineWidth = 1; }
+            else { ctx.strokeStyle = 'rgba(17,17,17,0.10)'; ctx.lineWidth = 1; }
+            ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
+        }
+    }
+
+    /* vertices inside the glyph: small ink squares (print is square) */
+    ctx.fillStyle = INK;
+    for (const p of pts) {
+        if (mask.at(p.x, p.y) > 0.5) ctx.fillRect(p.x - 1.4, p.y - 1.4, 2.8, 2.8);
+    }
+}
+
+/* ================================================================
+   HANG THE SHOW
+   ================================================================ */
+
+function renderAll() {
+    renderHero();
+    renderMeridian(document.getElementById('work-meridian'), 1187);
+    renderCensus(document.getElementById('work-census'), 2440);
+    renderMesh(document.getElementById('work-mesh'), 3319);
+}
+
+renderAll();
+
+/* re-hang once webfonts arrive, so glyph masks use the intended faces */
+if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(renderAll);
+}
+</script>
+
+</body>
+</html>

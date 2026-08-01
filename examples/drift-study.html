@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DRIFT STUDY — seeded flow field</title>
+<!--
+    DRIFT STUDY
+    A seeded flow-field drawing instrument.
+
+    The system: one integer seed feeds a mulberry32 PRNG, which shuffles the
+    permutation table of a classic 2D Perlin gradient-noise field and scatters
+    a population of particles across the sheet. Each particle then walks by
+    Euler integration — at every step it samples the field, turns to the local
+    angle, and advances a fixed stride, leaving a near-transparent ink filament
+    behind. Hundreds of steps accumulate into sediment: dense laminar channels
+    where the field agrees with itself, feathered shear zones where it folds.
+    Roughly one particle in sixty carries the piece's single accent — a forest
+    thread lost in the ink, the lone bird in the canopy.
+
+    Nothing in the composition touches Math.random(). Same seed, same
+    parameters, same frame — exactly. The four exposed parameters are true
+    degrees of freedom: noise scale sets the weather of the field, step length
+    its viscosity, particle count the density of sediment, line weight the
+    gauge of the filament. Export writes a 2x PNG whose filename carries the
+    seed, so the artifact can always be reproduced from its own name.
+
+    Algorithms: mulberry32 PRNG · Fisher–Yates seeded shuffle ·
+    Perlin gradient noise (Ken Perlin, 2002 fade) · Euler line integration.
+
+    Axel Ruiz Design — studio canon (atelier), 2026.
+-->
+<style>
+    :root {
+        --ink: #111111;
+        --paper: #ffffff;
+        --line: #e4e4e1;
+        --line-strong: #111111;
+        --mute: #8a8a86;
+        --accent: #1f4a2b;
+        --grotesque: 'Helvetica Neue', 'Inter', Arial, sans-serif;
+        --mono: 'Space Mono', 'Courier New', monospace;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+        font-family: var(--grotesque);
+        background: var(--paper);
+        color: var(--ink);
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+    }
+
+    /* ---- Topbar ---- */
+    .topbar {
+        display: flex; align-items: baseline; justify-content: space-between;
+        padding: 18px 28px;
+        border-bottom: 1px solid var(--line-strong);
+    }
+    .topbar .brand { font-size: 13px; font-weight: 700; letter-spacing: 0.34em; text-transform: uppercase; }
+    .topbar .meta  { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--mute); }
+
+    /* ---- Layout ---- */
+    .layout { display: flex; align-items: stretch; min-height: calc(100vh - 59px); }
+    .stage {
+        flex: 1; min-width: 0;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        padding: 56px 56px 40px; gap: 26px;
+        background:
+            repeating-linear-gradient(0deg, transparent, transparent 39px, rgba(17,17,17,0.015) 40px),
+            var(--paper);
+    }
+    #canvas-container {
+        width: 100%; max-width: 980px;
+        border: 1px solid var(--line-strong);
+        background: #fff; line-height: 0;
+    }
+    #canvas-container canvas { display: block; width: 100%; height: auto; }
+
+    .panel {
+        width: 372px; flex-shrink: 0;
+        border-left: 1px solid var(--line-strong);
+        overflow-y: auto; max-height: calc(100vh - 59px);
+        background: var(--paper);
+    }
+    .section { padding: 24px 28px; border-bottom: 1px solid var(--line); }
+    .section:last-child { border-bottom: none; }
+    .section-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+    .section-head .idx   { font-family: var(--mono); font-size: 11px; color: var(--accent); font-weight: 700; }
+    .section-head .title { font-size: 11px; font-weight: 600; letter-spacing: 0.26em; text-transform: uppercase; }
+
+    /* ---- Placard ---- */
+    .placard {
+        width: 100%; max-width: 980px;
+        border-top: 1px solid var(--line); padding-top: 14px;
+        display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    }
+    .placard-title { font-size: 13px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; }
+    .placard-line  { font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em; color: var(--mute); }
+    .placard-line .accent { color: var(--accent); }
+
+    /* ---- Fields ---- */
+    .field { margin-bottom: 18px; }
+    .field:last-child { margin-bottom: 0; }
+    .field-label { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 9px; }
+    .field-label .name { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink); }
+    .field-label .val  { font-family: var(--mono); font-size: 11px; color: var(--ink); }
+
+    input[type="range"] {
+        -webkit-appearance: none; appearance: none;
+        width: 100%; height: 1px; background: var(--line-strong); outline: none; cursor: pointer;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none; width: 11px; height: 11px;
+        background: var(--ink); border-radius: 0; cursor: pointer;
+        transition: background 0.12s;
+    }
+    input[type="range"]::-webkit-slider-thumb:hover { background: var(--accent); }
+    input[type="range"]::-moz-range-thumb {
+        width: 11px; height: 11px; background: var(--ink);
+        border: none; border-radius: 0; cursor: pointer;
+    }
+    input[type="range"]::-moz-range-thumb:hover { background: var(--accent); }
+
+    .btn {
+        display: inline-block; width: 100%;
+        background: var(--paper); color: var(--ink); border: 1px solid var(--ink);
+        padding: 11px 12px;
+        font-family: var(--grotesque); font-size: 10.5px; font-weight: 600;
+        letter-spacing: 0.18em; text-transform: uppercase; cursor: pointer;
+        transition: background 0.14s, color 0.14s, border-color 0.14s;
+    }
+    .btn:hover { background: var(--ink); color: var(--paper); }
+    .btn.accent { border-color: var(--accent); color: var(--accent); }
+    .btn.accent:hover { background: var(--accent); color: var(--paper); border-color: var(--accent); }
+    .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .stack > * { margin-bottom: 8px; }
+    .stack > *:last-child { margin-bottom: 0; }
+
+    .seed-input {
+        width: 100%; background: var(--paper); border: 1px solid var(--line-strong);
+        padding: 11px; font-family: var(--mono); font-size: 13px; letter-spacing: 0.1em;
+        text-align: center; color: var(--ink); margin-bottom: 8px;
+    }
+    .seed-input:focus { outline: none; border-color: var(--accent); }
+
+    .status {
+        font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.16em;
+        text-transform: uppercase; color: var(--mute); margin-top: 14px;
+    }
+
+    @media (max-width: 1100px) {
+        .layout { flex-direction: column; }
+        .stage { padding: 32px 24px 24px; }
+        .panel {
+            width: 100%; max-height: none;
+            border-left: none; border-top: 1px solid var(--line-strong);
+        }
+    }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="brand">Axel Ruiz Design</div>
+    <div class="meta" id="topMeta">Flow Field &middot; Seeded System</div>
+</header>
+
+<div class="layout">
+
+    <main class="stage">
+        <div id="canvas-container">
+            <canvas id="sheet" width="1960" height="1260"></canvas>
+        </div>
+        <div class="placard">
+            <div class="placard-title">Drift Study</div>
+            <div class="placard-line">
+                seed <span class="accent" id="placardSeed">4271</span>
+                &middot; perlin flow / mulberry32
+                &middot; euler integration
+                &middot; 1960&times;1260
+                &middot; 2026
+            </div>
+        </div>
+    </main>
+
+    <aside class="panel">
+
+        <div class="section">
+            <div class="section-head">
+                <span class="idx">01</span><span class="title">Seed</span>
+            </div>
+            <input type="text" class="seed-input" id="seedInput" inputmode="numeric"
+                   autocomplete="off" spellcheck="false" value="4271" aria-label="Seed">
+            <div class="btn-row">
+                <button class="btn" id="rerollBtn" type="button">Reroll</button>
+                <button class="btn" id="replotBtn" type="button">Replot</button>
+            </div>
+            <div class="status" id="status">Plotting 000 / 260</div>
+        </div>
+
+        <div class="section">
+            <div class="section-head">
+                <span class="idx">02</span><span class="title">Field</span>
+            </div>
+            <div class="field">
+                <div class="field-label">
+                    <span class="name">Noise Scale</span>
+                    <span class="val" id="scaleVal">0.0022</span>
+                </div>
+                <input type="range" id="scaleCtl" min="0" max="100" step="1" value="50">
+            </div>
+            <div class="field">
+                <div class="field-label">
+                    <span class="name">Step Length</span>
+                    <span class="val" id="stepVal">2.6 px</span>
+                </div>
+                <input type="range" id="stepCtl" min="8" max="80" step="1" value="26">
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-head">
+                <span class="idx">03</span><span class="title">Ink</span>
+            </div>
+            <div class="field">
+                <div class="field-label">
+                    <span class="name">Particle Count</span>
+                    <span class="val" id="countVal">1400</span>
+                </div>
+                <input type="range" id="countCtl" min="200" max="4000" step="20" value="1400">
+            </div>
+            <div class="field">
+                <div class="field-label">
+                    <span class="name">Line Weight</span>
+                    <span class="val" id="weightVal">1.0 px</span>
+                </div>
+                <input type="range" id="weightCtl" min="4" max="30" step="1" value="10">
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-head">
+                <span class="idx">04</span><span class="title">Output</span>
+            </div>
+            <button class="btn accent" id="exportBtn" type="button">Download PNG &middot; 2&times;</button>
+        </div>
+
+    </aside>
+</div>
+
+<script>
+/* ================= ATELIER GENERATIVE KIT (inlined) =================
+   Reproducibility contract: composition code never calls Math.random();
+   everything flows from one seed. Math.random appears exactly once below,
+   in the Reroll handler — choosing a new seed is navigation, not drawing. */
+
+function mulberry32(seed) {
+    let a = seed >>> 0;
+    return function () {
+        a |= 0; a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+const rng = {
+    range: (r, lo, hi) => lo + r() * (hi - lo),
+    shuffle: (r, arr) => {
+        for (let i = arr.length - 1; i > 0; i--) {
+            const j = Math.floor(r() * (i + 1));
+            [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+    },
+};
+
+function exportName(title, seed) {
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    return `${slug}_seed-${seed}.png`;
+}
+
+/* ================= PERLIN GRADIENT NOISE (seeded) =================
+   Classic 2D Perlin: a permutation table shuffled by the piece's PRNG,
+   gradients on the integer lattice, quintic fade (6t^5 - 15t^4 + 10t^3),
+   bilinear blend. Output roughly in [-1, 1]. */
+
+function makePerlin(r) {
+    const perm = new Uint8Array(512);
+    const base = Array.from({ length: 256 }, (_, i) => i);
+    rng.shuffle(r, base);
+    for (let i = 0; i < 512; i++) perm[i] = base[i & 255];
+
+    const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
+    const lerp = (a, b, t) => a + t * (b - a);
+    const grad = (h, x, y) => {
+        switch (h & 7) {
+            case 0: return  x + y;
+            case 1: return -x + y;
+            case 2: return  x - y;
+            case 3: return -x - y;
+            case 4: return  x;
+            case 5: return -x;
+            case 6: return  y;
+            default: return -y;
+        }
+    };
+
+    return function (x, y) {
+        const X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
+        const xf = x - Math.floor(x), yf = y - Math.floor(y);
+        const u = fade(xf), v = fade(yf);
+        const aa = perm[perm[X] + Y],     ab = perm[perm[X] + Y + 1];
+        const ba = perm[perm[X + 1] + Y], bb = perm[perm[X + 1] + Y + 1];
+        return lerp(
+            lerp(grad(aa, xf, yf),     grad(ba, xf - 1, yf),     u),
+            lerp(grad(ab, xf, yf - 1), grad(bb, xf - 1, yf - 1), u),
+            v
+        );
+    };
+}
+
+/* ================= THE PIECE ================= */
+
+const W = 1960, H = 1260;            /* internal resolution = 2x display */
+const TOTAL_TICKS = 260;             /* fixed plot duration — reproducible */
+const STEPS_PER_TICK = 3;            /* 780 steps per particle, total */
+const ANGLE_TURNS = 2.1;             /* field folds through ~2 full turns */
+const ACCENT_ODDS = 1 / 60;          /* the lone bird in the canopy */
+
+const canvas = document.getElementById('sheet');
+const ctx = canvas.getContext('2d');
+
+const el = id => document.getElementById(id);
+const seedInput = el('seedInput'),
+      scaleCtl = el('scaleCtl'), stepCtl = el('stepCtl'),
+      countCtl = el('countCtl'), weightCtl = el('weightCtl'),
+      scaleVal = el('scaleVal'), stepVal = el('stepVal'),
+      countVal = el('countVal'), weightVal = el('weightVal'),
+      statusEl = el('status'), placardSeed = el('placardSeed');
+
+/* Parameter mappings — sliders hold integers; these give them meaning. */
+const params = {
+    seed: 4271,
+    /* log-mapped: 0..100  ->  0.0004 .. 0.0120 (weather of the field) */
+    get noiseScale() { return 0.0004 * Math.pow(30, scaleCtl.value / 100); },
+    /* 8..80  ->  0.8 .. 8.0 display px (viscosity of the walk) */
+    get stepLen() { return stepCtl.value / 10; },
+    get count() { return +countCtl.value; },
+    /* 4..30  ->  0.4 .. 3.0 display px (gauge of the filament) */
+    get weight() { return weightCtl.value / 10; },
+};
+
+let particles = [];
+let noise = null;
+let walkRng = null;                 /* PRNG reserved for respawns mid-plot */
+let tick = 0;
+let generation = 0;                 /* cancels a superseded plot */
+
+function fmt(n, digits) { return n.toFixed(digits); }
+
+function syncReadouts() {
+    scaleVal.textContent = fmt(params.noiseScale, 4);
+    stepVal.textContent = fmt(params.stepLen, 1) + ' px';
+    countVal.textContent = params.count;
+    weightVal.textContent = fmt(params.weight, 1) + ' px';
+    placardSeed.textContent = params.seed;
+}
+
+function initPlot() {
+    const r = mulberry32(params.seed);
+    noise = makePerlin(r);
+
+    particles = [];
+    for (let i = 0; i < params.count; i++) {
+        const accent = r() < ACCENT_ODDS;
+        particles.push({
+            x: rng.range(r, 0, W),
+            y: rng.range(r, 0, H),
+            /* per-filament ink density and gauge, seeded */
+            alpha: accent ? rng.range(r, 0.10, 0.16) : rng.range(r, 0.040, 0.085),
+            w: params.weight * 2 * rng.range(r, 0.85, 1.15),
+            accent,
+        });
+    }
+    walkRng = r;                    /* respawns continue the same stream */
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, W, H);
+    ctx.lineCap = 'round';
+    tick = 0;
+}
+
+function plotTick() {
+    const scale = params.noiseScale;
+    const stride = params.stepLen * 2;      /* internal 2x */
+    const tau2 = Math.PI * 2 * ANGLE_TURNS;
+
+    for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        for (let s = 0; s < STEPS_PER_TICK; s++) {
+            const a = noise(p.x * scale, p.y * scale) * tau2;
+            p.x += Math.cos(a) * stride;
+            p.y += Math.sin(a) * stride;
+            if (p.x < 0 || p.y < 0 || p.x > W || p.y > H) {
+                /* left the sheet — stroke what exists, respawn, restart path */
+                ctx.strokeStyle = p.accent
+                    ? `rgba(31, 74, 43, ${p.alpha})`
+                    : `rgba(17, 17, 17, ${p.alpha})`;
+                ctx.lineWidth = p.w;
+                ctx.stroke();
+                p.x = rng.range(walkRng, 0, W);
+                p.y = rng.range(walkRng, 0, H);
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+                continue;
+            }
+            ctx.lineTo(p.x, p.y);
+        }
+        ctx.strokeStyle = p.accent
+            ? `rgba(31, 74, 43, ${p.alpha})`
+            : `rgba(17, 17, 17, ${p.alpha})`;
+        ctx.lineWidth = p.w;
+        ctx.stroke();
+    }
+    tick++;
+}
+
+function run() {
+    const gen = ++generation;
+    syncReadouts();
+    initPlot();
+    statusEl.textContent = 'Plotting 000 / ' + TOTAL_TICKS;
+
+    (function frame() {
+        if (gen !== generation) return;            /* superseded */
+        if (tick >= TOTAL_TICKS) {
+            statusEl.textContent =
+                'Resolved · ' + (TOTAL_TICKS * STEPS_PER_TICK) + ' steps';
+            return;
+        }
+        plotTick();
+        statusEl.textContent =
+            'Plotting ' + String(tick).padStart(3, '0') + ' / ' + TOTAL_TICKS;
+        requestAnimationFrame(frame);
+    })();
+}
+
+/* ================= WIRING ================= */
+
+function applySeedFromInput() {
+    const n = parseInt(seedInput.value, 10);
+    params.seed = Number.isFinite(n) ? (Math.abs(n) >>> 0) : 0;
+    seedInput.value = params.seed;
+    run();
+}
+
+seedInput.addEventListener('change', applySeedFromInput);
+seedInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { seedInput.blur(); }
+});
+
+el('rerollBtn').addEventListener('click', () => {
+    /* The single sanctioned Math.random(): choosing where to look next. */
+    params.seed = Math.floor(Math.random() * 100000);
+    seedInput.value = params.seed;
+    run();
+});
+
+el('replotBtn').addEventListener('click', run);
+
+[scaleCtl, stepCtl, countCtl, weightCtl].forEach(ctl =>
+    ctl.addEventListener('input', run));
+
+el('exportBtn').addEventListener('click', () => {
+    canvas.toBlob(blob => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = exportName('Drift Study', params.seed);
+        a.click();
+        URL.revokeObjectURL(a.href);
+    }, 'image/png');
+});
+
+run();
+</script>
+</body>
+</html>

@@ -1,0 +1,1211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maintenance OS — Duty Cycle</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,500;0,600;0,700;1,500&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<!--
+    MAINTENANCE OS — DUTY CYCLE
+    A seeded operating picture of a building under maintenance.
+
+    The plant is grown, not drawn. One integer seed cuts a circulation
+    hall through a rectangular plate, then partitions each wing by
+    recursive binary space division until the room count is met. A
+    breadth-first door tree hangs every room back onto the hall, so the
+    plan reads as a building rather than a treemap. The room nearest the
+    centroid becomes the mechanical core. Four services — air, power,
+    water, fire — run as parallel risers inside the hall and reach each
+    served room by an orthogonal path along the door tree.
+
+    Time is a duty cycle. At the opening of the duty year (plant age ×
+    365 days) every asset samples a Weibull residual life from its own
+    mulberry32 stream: shape is a property of the service, scale shrinks
+    as the plant ages and as occupancy rises. That residual is a fixed
+    calendar date. The day
+    control slides a window of `horizon` days across the calendar; what
+    falls inside is a corrective order. A crew of the chosen size takes
+    the highest priority first — criticality of the program divided by
+    days remaining — and what remains open is the only accent on the
+    sheet. Preventive marks are a second cadence: a seeded phase on each
+    service interval, drawn as quiet crosses, never in the accent.
+
+    The service key is the shift. It does not rebuild the plant; it
+    decides which network, and which orders, are on the table. The crew
+    is then assigned inside that shift. Selection in the register is
+    operator chrome: it inverts a row and does not enter the sheet, so
+    an export is a function of seed and parameters alone.
+
+    The sheet is top-aligned in the stage, a deliberate break from the
+    centered armature, so the placard and the register stay on the
+    first screen with the plan. The frame still does not perform.
+
+    Nothing in the composition touches Math.random(), except the Reroll
+    control, which only chooses the next seed. The sheet is rasterized
+    at 1960×1260 — twice the design size — so a 2px filament is the
+    canon’s 1px rule. Export writes that bitmap; the filename carries
+    the seed.
+
+    Algorithms: mulberry32 · Fisher–Yates shuffle · recursive binary
+    space partition · BFS door tree · orthogonal riser-and-branch ·
+    Weibull conditional residual life · priority dispatch.
+
+    Axel Ruiz Design — studio canon (atelier), 2026.
+-->
+<style>
+    :root {
+        --ink: #111111;
+        --paper: #ffffff;
+        --line: #e4e4e1;
+        --line-strong: #111111;
+        --mute: #8a8a86;
+        --accent: #1f4a2b;
+        --grotesque: 'Helvetica Neue', 'Inter', Arial, sans-serif;
+        --mono: 'Space Mono', 'Courier New', monospace;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+        font-family: var(--grotesque);
+        background: var(--paper);
+        color: var(--ink);
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+    }
+
+    .topbar {
+        display: flex; align-items: baseline; justify-content: space-between;
+        gap: 12px 24px; flex-wrap: wrap;
+        padding: 18px 28px;
+        border-bottom: 1px solid var(--line-strong);
+    }
+    .topbar .brand { font-size: 13px; font-weight: 700; letter-spacing: 0.34em; text-transform: uppercase; }
+    .topbar .meta  { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--mute); }
+
+    .layout { display: flex; align-items: stretch; min-height: calc(100vh - 59px); }
+    .stage {
+        flex: 1; min-width: 0;
+        display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+        padding: 40px 44px 28px; gap: 16px;
+        background:
+            repeating-linear-gradient(0deg, transparent, transparent 39px, rgba(17,17,17,0.015) 40px),
+            var(--paper);
+    }
+    #canvas-container {
+        width: 100%;
+        max-width: min(980px, calc(50vh * 1960 / 1260));
+        border: 1px solid var(--line-strong);
+        background: #fff; line-height: 0;
+    }
+    #canvas-container canvas { display: block; width: 100%; height: auto; }
+
+    .panel {
+        width: 372px; flex-shrink: 0;
+        border-left: 1px solid var(--line-strong);
+        overflow-y: auto; max-height: calc(100vh - 59px);
+        background: var(--paper);
+    }
+    .section { padding: 20px 28px; border-bottom: 1px solid var(--line); }
+    .section:last-child { border-bottom: none; }
+    .section-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+    .section-head .idx   { font-family: var(--mono); font-size: 11px; color: var(--accent); font-weight: 700; }
+    .section-head .title { font-size: 11px; font-weight: 600; letter-spacing: 0.26em; text-transform: uppercase; }
+    .section-head .count {
+        margin-left: auto;
+        font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: var(--ink);
+    }
+
+    .caption {
+        width: 100%;
+        max-width: min(980px, calc(50vh * 1960 / 1260));
+        display: flex; flex-direction: column; gap: 14px;
+    }
+    .placard {
+        width: 100%;
+        border-top: 1px solid var(--line); padding-top: 14px;
+        display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    }
+    .placard-title { font-size: 13px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; }
+    .placard-line  { font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em; color: var(--mute); }
+    .placard-line .accent { color: var(--accent); }
+
+    .field { margin-bottom: 14px; }
+    .field:last-child { margin-bottom: 0; }
+    .field-label { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 9px; }
+    .field-label .name { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink); }
+    .field-label .val  { font-family: var(--mono); font-size: 11px; color: var(--ink); }
+
+    input[type="range"] {
+        -webkit-appearance: none; appearance: none;
+        width: 100%; height: 1px; background: var(--line-strong); outline: none; cursor: pointer;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none; width: 11px; height: 11px;
+        background: var(--ink); border-radius: 0; cursor: pointer;
+        transition: background 0.12s;
+    }
+    input[type="range"]::-webkit-slider-thumb:hover { background: var(--accent); }
+    input[type="range"]::-moz-range-thumb {
+        width: 11px; height: 11px; background: var(--ink);
+        border: none; border-radius: 0; cursor: pointer;
+    }
+    input[type="range"]::-moz-range-thumb:hover { background: var(--accent); }
+
+    .btn {
+        display: inline-block; width: 100%;
+        background: var(--paper); color: var(--ink); border: 1px solid var(--ink);
+        padding: 11px 12px;
+        font-family: var(--grotesque); font-size: 10.5px; font-weight: 600;
+        letter-spacing: 0.18em; text-transform: uppercase; cursor: pointer;
+        transition: background 0.14s, color 0.14s, border-color 0.14s;
+    }
+    .btn:hover { background: var(--ink); color: var(--paper); }
+    .btn:focus { outline: none; }
+    .btn:focus-visible { border-color: var(--accent); }
+    .btn.is-on { background: var(--ink); color: var(--paper); }
+    .btn.accent { border-color: var(--accent); color: var(--accent); }
+    .btn.accent:hover { background: var(--accent); color: var(--paper); border-color: var(--accent); }
+    .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .btn-row.day { margin-bottom: 14px; }
+    .svc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .svc-grid .wide { grid-column: 1 / -1; }
+    .stack > * { margin-bottom: 8px; }
+    .stack > *:last-child { margin-bottom: 0; }
+
+    .toggle { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; }
+    .toggle .name { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; }
+    .toggle input[type="checkbox"] {
+        appearance: none; -webkit-appearance: none; width: 16px; height: 16px;
+        border: 1px solid var(--ink); background: var(--paper); cursor: pointer; position: relative;
+    }
+    .toggle input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
+    .toggle input[type="checkbox"]:checked::after {
+        content: ''; position: absolute; left: 4px; top: 1px; width: 5px; height: 9px;
+        border: solid var(--paper); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg);
+    }
+    .toggle input[type="checkbox"]:focus { outline: none; }
+    .toggle input[type="checkbox"]:focus-visible { border-color: var(--accent); }
+
+    .seed-input {
+        width: 100%; background: var(--paper); border: 1px solid var(--line-strong);
+        padding: 11px; font-family: var(--mono); font-size: 13px; letter-spacing: 0.1em;
+        text-align: center; color: var(--ink); margin-bottom: 8px;
+    }
+    .seed-input:focus { outline: none; border-color: var(--accent); }
+
+    .status {
+        font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em;
+        text-transform: uppercase; color: var(--mute); margin-top: 14px;
+    }
+
+    .census { margin-top: 18px; }
+    .census-row {
+        display: grid; grid-template-columns: 42px 1fr 1fr 1fr;
+        gap: 6px; align-items: baseline;
+        padding: 7px 0;
+        border-top: 1px solid var(--line);
+        font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.06em;
+    }
+    .census-row span:not(:first-child) { text-align: right; color: var(--mute); }
+    .census-row strong { font-weight: 400; color: var(--ink); }
+
+    .ledger { border-top: 1px solid var(--line-strong); padding-top: 12px; }
+    .ledger-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+    .ledger-head .title { font-size: 11px; font-weight: 600; letter-spacing: 0.26em; text-transform: uppercase; }
+    .ledger-head .count { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; }
+
+    .register { list-style: none; max-height: 148px; overflow-y: auto; }
+    .register li {
+        display: grid;
+        grid-template-columns: 92px 52px 1fr 56px 64px;
+        gap: 8px; align-items: baseline;
+        padding: 6px 2px;
+        border-bottom: 1px solid var(--line);
+        font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.04em;
+        cursor: pointer;
+        transition: background 0.14s, color 0.14s;
+    }
+    .register li:hover { background: var(--ink); color: var(--paper); }
+    .register li.is-on { background: var(--ink); color: var(--paper); }
+    .register li span:last-child { text-align: right; }
+    .register li.empty { display: block; cursor: default; border-bottom: none; padding: 0; }
+    .register li.empty:hover { background: transparent; color: var(--mute); }
+    .empty {
+        font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em;
+        text-transform: uppercase; color: var(--mute);
+    }
+
+    @media (max-width: 1100px) {
+        .layout { flex-direction: column; }
+        .stage { padding: 24px 20px 20px; }
+        #canvas-container, .caption { max-width: 100%; }
+        .panel {
+            width: 100%; max-height: none;
+            border-left: none; border-top: 1px solid var(--line-strong);
+        }
+    }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="brand">Maintenance OS</div>
+    <div class="meta" id="topMeta">Duty Cycle · Seeded Plant</div>
+</header>
+
+<div class="layout">
+
+    <main class="stage">
+        <div id="canvas-container">
+            <canvas id="sheet" width="1960" height="1260"></canvas>
+        </div>
+        <div class="caption">
+            <div class="placard">
+                <div class="placard-title">Duty Cycle</div>
+                <div class="placard-line" id="placardLine">
+                    seed <span class="accent" id="placardSeed">4271</span>
+                    · weibull residual / bsp plan
+                    · door-tree risers
+                    · 1960&times;1260
+                    · 2026
+                </div>
+            </div>
+            <div class="ledger">
+                <div class="ledger-head">
+                    <span class="title">Register</span>
+                    <span class="count" id="regCount">00</span>
+                </div>
+                <ul class="register" id="register"></ul>
+            </div>
+        </div>
+    </main>
+
+    <aside class="panel">
+
+        <div class="section">
+            <div class="section-head">
+                <span class="idx">01</span><span class="title">Seed</span>
+            </div>
+            <input type="text" class="seed-input" id="seedInput" inputmode="numeric"
+                   autocomplete="off" spellcheck="false" value="4271" aria-label="Seed">
+            <button class="btn" id="rerollBtn" type="button">Reroll</button>
+            <div class="status" id="status">Opening the register</div>
+        </div>
+
+        <div class="section">
+            <div class="section-head">
+                <span class="idx">02</span><span class="title">Plant</span>
+            </div>
+            <div class="field">
+                <div class="field-label">
+                    <span class="name">Rooms</span>
+                    <span class="val" id="roomsVal">14</span>
+                </div>
+                <input type="range" id="roomsCtl" min="8" max="20" step="1" value="14" aria-label="Rooms">
+            </div>
+            <div class="field">
+                <div class="field-label">
+                    <span class="name">Plant Age</span>
+                    <span class="val" id="ageVal">34 yr</span>
+                </div>
+                <input type="range" id="ageCtl" min="4" max="60" step="1" value="34" aria-label="Plant age">
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-head">
+                <span class="idx">03</span><span class="title">Duty</span>
+            </div>
+            <div class="btn-row day">
+                <button class="btn" id="dayBack" type="button">Day −</button>
+                <button class="btn" id="dayFwd" type="button">Day +</button>
+            </div>
+            <div class="field">
+                <div class="field-label">
+                    <span class="name">Duty Day</span>
+                    <span class="val" id="dayVal">001</span>
+                </div>
+                <input type="range" id="dayCtl" min="1" max="365" step="1" value="1" aria-label="Duty day">
+            </div>
+            <div class="field">
+                <div class="field-label">
+                    <span class="name">Horizon</span>
+                    <span class="val" id="horizonVal">48 d</span>
+                </div>
+                <input type="range" id="horizonCtl" min="14" max="120" step="1" value="48" aria-label="Horizon">
+            </div>
+            <div class="field">
+                <div class="field-label">
+                    <span class="name">Occupancy</span>
+                    <span class="val" id="occVal">62%</span>
+                </div>
+                <input type="range" id="occCtl" min="0" max="100" step="1" value="62" aria-label="Occupancy">
+            </div>
+            <div class="field">
+                <div class="field-label">
+                    <span class="name">Crew</span>
+                    <span class="val" id="crewVal">02</span>
+                </div>
+                <input type="range" id="crewCtl" min="0" max="8" step="1" value="2" aria-label="Crew">
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-head">
+                <span class="idx">04</span><span class="title">Services</span>
+            </div>
+            <div class="svc-grid" id="svcGrid">
+                <button class="btn is-on wide" type="button" data-svc="ALL">All Services</button>
+                <button class="btn" type="button" data-svc="AIR">Air</button>
+                <button class="btn" type="button" data-svc="PWR">Power</button>
+                <button class="btn" type="button" data-svc="WTR">Water</button>
+                <button class="btn" type="button" data-svc="FIR">Fire</button>
+            </div>
+            <label class="toggle">
+                <span class="name">Preventive</span>
+                <input type="checkbox" id="pmCtl" checked>
+            </label>
+            <label class="toggle">
+                <span class="name">Room Names</span>
+                <input type="checkbox" id="namesCtl" checked>
+            </label>
+            <div class="census" id="census"></div>
+        </div>
+
+        <div class="section">
+            <div class="section-head">
+                <span class="idx">05</span><span class="title">Output</span>
+            </div>
+            <button class="btn accent" id="exportBtn" type="button">Download PNG · 2×</button>
+        </div>
+
+    </aside>
+</div>
+
+<script>
+/* ================= ATELIER GENERATIVE KIT (inlined) =================
+   Reproducibility contract: composition code never calls Math.random();
+   everything flows from one seed. Math.random appears exactly once,
+   in the Reroll handler — choosing a new seed is navigation, not drawing. */
+
+function mulberry32(seed) {
+    let a = seed >>> 0;
+    return function () {
+        a |= 0; a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+const rng = {
+    shuffle: (r, arr) => {
+        for (let i = arr.length - 1; i > 0; i--) {
+            const j = Math.floor(r() * (i + 1));
+            [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+    },
+};
+
+function exportName(title, seed) {
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    return `${slug}_seed-${seed}.png`;
+}
+
+function mix(a, b) {
+    let x = (Math.imul(a >>> 0, 0x9E3779B1) ^ (b >>> 0)) >>> 0;
+    x = Math.imul(x ^ (x >>> 16), 0x85EBCA6B) >>> 0;
+    x = Math.imul(x ^ (x >>> 13), 0xC2B2AE35) >>> 0;
+    return (x ^ (x >>> 16)) >>> 0;
+}
+
+/* ================= THE PLANT ================= */
+
+const W = 1960, H = 1260;
+const PLAN = { x: 64, y: 48, w: 1832, h: 968 };
+const SANS = '"Helvetica Neue", Inter, Arial, sans-serif';
+const MONO = '"Space Mono", "Courier New", monospace';
+const INK = '#111111';
+const PAPER = '#ffffff';
+const MUTE = '#8a8a86';
+const ACCENT = '#1f4a2b';
+
+const SITES = [
+    'North Stack', 'River Court', 'Atlas Wing', 'Bindery Hall',
+    'Ledger House', 'Quiet Range', 'Ordinal Block', 'Census Hall',
+    'Paper Court', 'Kiln Annex', 'South Vault', 'Lantern Wing',
+];
+
+/* id, criticality, affinity [air, power, water, fire] */
+const DECK = [
+    ['LOBBY',    3, [0.82, 0.52, 0.22, 0.68]],
+    ['GALLERY',  4, [0.88, 0.48, 0.16, 0.72]],
+    ['ARCHIVE',  5, [0.76, 0.42, 0.10, 0.84]],
+    ['VAULT',    5, [0.70, 0.58, 0.08, 0.90]],
+    ['LAB',      4, [0.80, 0.86, 0.72, 0.60]],
+    ['STUDIO',   3, [0.58, 0.62, 0.36, 0.42]],
+    ['READING',  2, [0.50, 0.36, 0.10, 0.46]],
+    ['STACKS',   3, [0.46, 0.32, 0.06, 0.56]],
+    ['OFFICE',   2, [0.62, 0.74, 0.18, 0.36]],
+    ['SHOP',     3, [0.52, 0.66, 0.40, 0.38]],
+    ['STORE',    2, [0.30, 0.34, 0.14, 0.28]],
+    ['PRINT',    3, [0.56, 0.60, 0.44, 0.34]],
+    ['DARKROOM', 3, [0.72, 0.50, 0.86, 0.30]],
+    ['BINDERY',  3, [0.42, 0.46, 0.26, 0.32]],
+    ['COURT',    2, [0.24, 0.20, 0.16, 0.22]],
+    ['CLOSET',   1, [0.16, 0.22, 0.06, 0.16]],
+];
+
+const SERVICES = [
+    { id: 'AIR', name: 'Air',   k: 1.28, life: 980,  every: 160 },
+    { id: 'PWR', name: 'Power', k: 1.12, life: 1240, every: 220 },
+    { id: 'WTR', name: 'Water', k: 1.22, life: 1080, every: 180 },
+    { id: 'FIR', name: 'Fire',  k: 1.55, life: 1680, every: 320 },
+];
+
+const canvas = document.getElementById('sheet');
+const ctx = canvas.getContext('2d');
+const el = id => document.getElementById(id);
+
+const params = {
+    seed: 4271,
+    get rooms()     { return +el('roomsCtl').value; },
+    get age()       { return +el('ageCtl').value; },
+    get day()       { return +el('dayCtl').value; },
+    get horizon()   { return +el('horizonCtl').value; },
+    get occupancy() { return +el('occCtl').value / 100; },
+    get crew()      { return +el('crewCtl').value; },
+    service: 'ALL',
+    get showPM()    { return el('pmCtl').checked; },
+    get showNames() { return el('namesCtl').checked; },
+};
+
+let focusKey = null;
+
+function pad(n, w) {
+    return String(Math.max(0, Math.round(n))).padStart(w, '0');
+}
+
+function cutOne(r, L, minW, minH) {
+    const canV = L.w >= minW * 2;
+    const canH = L.h >= minH * 2;
+    if (!canV && !canH) return null;
+    let vertical = canV && (!canH || L.w >= L.h);
+    if (canV && canH && r() < 0.18) vertical = !vertical;
+    if (vertical && !canV) vertical = false;
+    if (!vertical && !canH) vertical = true;
+    const size = vertical ? L.w : L.h;
+    const min = vertical ? minW : minH;
+    let ratio = 0.36 + r() * 0.28;
+    const lo = min / size, hi = 1 - lo;
+    if (ratio < lo) ratio = lo;
+    if (ratio > hi) ratio = hi;
+    const cut = Math.max(min, Math.min(size - min, Math.round(size * ratio)));
+    if (vertical) {
+        return [
+            { x: L.x, y: L.y, w: cut, h: L.h },
+            { x: L.x + cut, y: L.y, w: L.w - cut, h: L.h },
+        ];
+    }
+    return [
+        { x: L.x, y: L.y, w: L.w, h: cut },
+        { x: L.x, y: L.y + cut, w: L.w, h: L.h - cut },
+    ];
+}
+
+function grow(r, roots, count, minW, minH) {
+    const leaves = roots.map(x => ({ x: x.x, y: x.y, w: x.w, h: x.h }));
+    let guard = 0;
+    while (leaves.length < count && guard++ < 400) {
+        let idx = -1, area = -1;
+        for (let i = 0; i < leaves.length; i++) {
+            const L = leaves[i];
+            if ((L.w >= minW * 2 || L.h >= minH * 2) && L.w * L.h > area) {
+                area = L.w * L.h;
+                idx = i;
+            }
+        }
+        if (idx < 0) break;
+        const parts = cutOne(r, leaves[idx], minW, minH);
+        if (!parts) break;
+        leaves.splice(idx, 1, parts[0], parts[1]);
+    }
+    return leaves;
+}
+
+/* Recursive BSP wings around a circulation hall. */
+function buildGeometry(seed, roomCount) {
+    const r = mulberry32(seed >>> 0);
+    const plan = PLAN;
+    const vertical = r() < 0.5;
+    /* A hall wide enough to carry four risers and a name, never a sliver. */
+    const span = vertical ? plan.w : plan.h;
+    const thick = Math.round(Math.min(span * 0.22, 168 + r() * 56));
+    const t = 0.30 + r() * 0.40;
+    let hall, wings;
+    if (vertical) {
+        const x = Math.round(plan.x + (plan.w - thick) * t);
+        hall = { x, y: plan.y, w: thick, h: plan.h };
+        wings = [
+            { x: plan.x, y: plan.y, w: x - plan.x, h: plan.h },
+            { x: x + thick, y: plan.y, w: plan.x + plan.w - (x + thick), h: plan.h },
+        ];
+    } else {
+        const y = Math.round(plan.y + (plan.h - thick) * t);
+        hall = { x: plan.x, y, w: plan.w, h: thick };
+        wings = [
+            { x: plan.x, y: plan.y, w: plan.w, h: y - plan.y },
+            { x: plan.x, y: y + thick, w: plan.w, h: plan.y + plan.h - (y + thick) },
+        ];
+    }
+    wings = wings.filter(w => w.w >= 180 && w.h >= 150);
+    const rooms = grow(r, wings, Math.max(1, roomCount - 1), 168, 140);
+    hall.fixed = true;
+    rooms.push(hall);
+
+    rooms.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+    rooms.forEach((rm, i) => { rm.n = i + 1; });
+
+    hall.program = 'HALL';
+    hall.crit = 1;
+    hall.aff = [0.34, 0.40, 0.12, 0.48];
+
+    const cx = plan.x + plan.w / 2, cy = plan.y + plan.h / 2;
+    let mech = null, best = Infinity;
+    for (const rm of rooms) {
+        if (rm === hall) continue;
+        const d = (rm.x + rm.w / 2 - cx) ** 2 + (rm.y + rm.h / 2 - cy) ** 2;
+        if (d < best) { best = d; mech = rm; }
+    }
+    if (mech) {
+        mech.program = 'MECH';
+        mech.crit = 5;
+        mech.aff = [1, 1, 1, 1];
+    }
+
+    const deck = DECK.map(d => d.slice());
+    rng.shuffle(mulberry32(mix(seed, 2)), deck);
+    let k = 0;
+    for (const rm of rooms) {
+        if (rm.program) continue;
+        const p = deck[k % deck.length];
+        k++;
+        rm.program = p[0];
+        rm.crit = p[1];
+        rm.aff = p[2];
+    }
+
+    doorTree(rooms, hall);
+    const site = SITES[mulberry32(mix(seed, 1))() * SITES.length | 0];
+    return { rooms, hall, site, vertical: hall.h >= hall.w };
+}
+
+function sharedEdge(a, b) {
+    if (a.x + a.w === b.x || b.x + b.w === a.x) {
+        const x = (a.x + a.w === b.x) ? a.x + a.w : a.x;
+        const y1 = Math.max(a.y, b.y);
+        const y2 = Math.min(a.y + a.h, b.y + b.h);
+        if (y2 - y1 >= 40) return { x1: x, y1, x2: x, y2, vertical: true };
+    }
+    if (a.y + a.h === b.y || b.y + b.h === a.y) {
+        const y = (a.y + a.h === b.y) ? a.y + a.h : a.y;
+        const x1 = Math.max(a.x, b.x);
+        const x2 = Math.min(a.x + a.w, b.x + b.w);
+        if (x2 - x1 >= 40) return { x1, y1: y, x2, y2: y, vertical: false };
+    }
+    return null;
+}
+
+/* One door per room, on the BFS path back to the hall.
+   Each child remembers its parent so services can follow the same tree. */
+function doorTree(rooms, hall) {
+    const n = rooms.length;
+    const adj = Array.from({ length: n }, () => []);
+    for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+            const e = sharedEdge(rooms[i], rooms[j]);
+            if (!e) continue;
+            adj[i].push({ j, e });
+            adj[j].push({ j: i, e });
+        }
+    }
+    const hallIdx = rooms.indexOf(hall);
+    const seen = new Array(n).fill(false);
+    const q = [hallIdx];
+    seen[hallIdx] = true;
+    hall.parent = null;
+    hall.door = null;
+    while (q.length) {
+        const i = q.shift();
+        for (const link of adj[i]) {
+            if (seen[link.j]) continue;
+            seen[link.j] = true;
+            const child = rooms[link.j];
+            child.parent = rooms[i];
+            child.door = gapOf(link.e, child);
+            q.push(link.j);
+        }
+    }
+}
+
+function gapOf(e, child) {
+    let x1, y1, x2, y2, mx, my;
+    if (e.vertical) {
+        const len = e.y2 - e.y1;
+        const g = Math.min(84, Math.max(42, len * 0.26));
+        const mid = (e.y1 + e.y2) / 2;
+        x1 = x2 = e.x1;
+        y1 = mid - g / 2;
+        y2 = mid + g / 2;
+        mx = e.x1;
+        my = mid;
+    } else {
+        const len = e.x2 - e.x1;
+        const g = Math.min(84, Math.max(42, len * 0.26));
+        const mid = (e.x1 + e.x2) / 2;
+        y1 = y2 = e.y1;
+        x1 = mid - g / 2;
+        x2 = mid + g / 2;
+        mx = mid;
+        my = e.y1;
+    }
+    const dx = (child.x + child.w / 2) - mx;
+    const dy = (child.y + child.h / 2) - my;
+    const hyp = Math.hypot(dx, dy) || 1;
+    return { x1, y1, x2, y2, mx, my, nx: dx / hyp, ny: dy / hyp };
+}
+
+/* Inverse CDF of a Weibull left-truncated at T. Residual is days after T. */
+function weibullResidual(u, T, lambda, k) {
+    const uu = Math.min(1 - 1e-12, Math.max(1e-12, u));
+    const Tk = Math.pow(T / lambda, k);
+    const tk = Tk - Math.log(1 - uu);
+    return lambda * Math.pow(tk, 1 / k) - T;
+}
+
+function buildDuty(seed, geom, p) {
+    const T = p.age * 365;
+    const load = 0.55 + 0.90 * p.occupancy;
+    const ageFactor = 0.42 + Math.pow(p.age / 30, 1.18);
+    const assets = [];
+    for (const rm of geom.rooms) {
+        for (let si = 0; si < SERVICES.length; si++) {
+            const svc = SERVICES[si];
+            const ar = mulberry32(mix(mix(seed, rm.n * 13 + 1), si + 5));
+            const present = rm.program === 'MECH' || ar() < rm.aff[si];
+            if (!present) continue;
+            const lambda = svc.life / (load * ageFactor);
+            const residual = weibullResidual(ar(), T, lambda, svc.k);
+            const phase = ar();
+            assets.push({ rm, si, svc, residual, phase, crit: rm.crit });
+        }
+    }
+
+    const visible = p.service === 'ALL'
+        ? assets
+        : assets.filter(a => a.svc.id === p.service);
+
+    const origin = p.day - 1;
+    const orders = [];
+    for (const a of visible) {
+        const days = a.residual - origin;
+        if (days >= 0 && days < p.horizon) {
+            orders.push({
+                kind: 'COR',
+                days,
+                room: a.rm,
+                svc: a.svc,
+                crit: a.crit,
+                wo: (mix(seed, a.rm.n * 17 + a.si + 1) % 800) + 100,
+                key: a.rm.n + '-' + a.svc.id,
+            });
+        }
+        if (p.showPM) {
+            const every = a.svc.every;
+            const pmAt = a.phase * every;
+            const mod = ((pmAt - (origin % every)) % every + every) % every;
+            if (mod < p.horizon) {
+                orders.push({
+                    kind: 'PM',
+                    days: mod,
+                    room: a.rm,
+                    svc: a.svc,
+                    crit: a.crit,
+                    wo: null,
+                    key: a.rm.n + '-' + a.svc.id + '-pm',
+                    state: 'PM',
+                });
+            }
+        }
+    }
+
+    const corrective = orders.filter(o => o.kind === 'COR');
+    corrective.sort((a, b) => {
+        const pa = a.crit / (1 + a.days);
+        const pb = b.crit / (1 + b.days);
+        if (pb !== pa) return pb - pa;
+        return a.wo - b.wo;
+    });
+    const crewN = Math.min(p.crew, corrective.length);
+    for (let i = 0; i < corrective.length; i++) {
+        corrective[i].state = i < crewN ? 'CREW' : 'OPEN';
+    }
+
+    const census = SERVICES.map(svc => {
+        const mine = orders.filter(o => o.svc.id === svc.id);
+        return {
+            id: svc.id,
+            assets: assets.filter(a => a.svc.id === svc.id).length,
+            open: mine.filter(o => o.state === 'OPEN').length,
+            crew: mine.filter(o => o.state === 'CREW').length,
+            pm: mine.filter(o => o.state === 'PM').length,
+        };
+    });
+
+    return { assets: visible, orders, census };
+}
+
+/* ================= THE SHEET ================= */
+
+/* Orthogonal route along doorways, so the filament misses the room name. */
+function routeToRiser(rm, hall, riser) {
+    const poly = [];
+    if (rm.door) {
+        poly.push({
+            x: rm.door.mx + rm.door.nx * 22,
+            y: rm.door.my + rm.door.ny * 22,
+        });
+        poly.push({ x: rm.door.mx, y: rm.door.my });
+    } else {
+        poly.push({ x: rm.x + rm.w / 2, y: rm.y + rm.h / 2 });
+    }
+    let cur = rm;
+    let guard = 0;
+    while (cur.parent && cur.parent !== hall && guard++ < 24) {
+        const d = cur.parent.door;
+        if (d) poly.push({ x: d.mx, y: d.my });
+        cur = cur.parent;
+    }
+    const a = poly[poly.length - 1];
+    poly.push({ x: riser.x, y: a.y }, { x: riser.x, y: riser.y });
+    return poly;
+}
+
+function serviceLayers(geom, assets) {
+    const hall = geom.hall;
+    const chase = new Map();
+    const fans = [[], [], [], []];
+    const trunks = [null, null, null, null];
+    const present = [false, false, false, false];
+    for (const a of assets) present[a.si] = true;
+
+    for (let si = 0; si < 4; si++) {
+        if (!present[si]) continue;
+        const off = (si - 1.5) * 9;
+        const riser = geom.vertical
+            ? { x: Math.round(hall.x + hall.w / 2 + off), y: Math.round(hall.y + hall.h / 2) }
+            : { x: Math.round(hall.x + hall.w / 2), y: Math.round(hall.y + hall.h / 2 + off) };
+        trunks[si] = geom.vertical
+            ? [riser.x, hall.y + 22, riser.x, hall.y + hall.h - 22]
+            : [hall.x + 22, riser.y, hall.x + hall.w - 22, riser.y];
+        for (const a of assets) {
+            if (a.si !== si || a.rm === hall || !a.rm.parent) continue;
+            const poly = routeToRiser(a.rm, hall, riser);
+            const fanAt = Math.max(1, poly.length - 2);
+            for (let i = 0; i < fanAt - 1; i++) {
+                const A = poly[i], B = poly[i + 1];
+                if (Math.abs(A.x - B.x) < 0.5 && Math.abs(A.y - B.y) < 0.5) continue;
+                const k = [A.x, A.y, B.x, B.y].map(n => Math.round(n)).join(',');
+                const k2 = [B.x, B.y, A.x, A.y].map(n => Math.round(n)).join(',');
+                if (!chase.has(k) && !chase.has(k2)) chase.set(k, [A.x, A.y, B.x, B.y]);
+            }
+            for (let i = fanAt - 1; i < poly.length - 1; i++) {
+                const A = poly[i], B = poly[i + 1];
+                fans[si].push([A.x, A.y, B.x, B.y]);
+            }
+        }
+    }
+    return { chase: Array.from(chase.values()), fans, trunks };
+}
+
+function strokeSegs(segs) {
+    ctx.beginPath();
+    for (const s of segs) {
+        if (!s || s.length < 4) continue;
+        ctx.moveTo(s[0], s[1]);
+        ctx.lineTo(s[2], s[3]);
+    }
+    ctx.stroke();
+}
+
+function drawSheet(geom, duty) {
+    ctx.fillStyle = PAPER;
+    ctx.fillRect(0, 0, W, H);
+    ctx.lineCap = 'butt';
+    ctx.lineJoin = 'miter';
+    ctx.letterSpacing = '0px';
+
+    const showSvc = params.service === 'ALL'
+        ? [0, 1, 2, 3]
+        : [SERVICES.findIndex(s => s.id === params.service)];
+    const layers = serviceLayers(geom, duty.assets);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(PLAN.x, PLAN.y, PLAN.w, PLAN.h);
+    ctx.clip();
+    ctx.strokeStyle = 'rgba(17,17,17,0.55)';
+    ctx.lineWidth = 2.25;
+    strokeSegs(layers.chase);
+    ctx.strokeStyle = params.service === 'ALL' ? 'rgba(17,17,17,0.75)' : INK;
+    ctx.lineWidth = params.service === 'ALL' ? 2 : 3;
+    showSvc.forEach(si => {
+        if (si < 0) return;
+        const parts = [];
+        if (layers.trunks[si]) parts.push(layers.trunks[si]);
+        parts.push(...layers.fans[si]);
+        strokeSegs(parts);
+    });
+    ctx.restore();
+
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2;
+    for (const rm of geom.rooms) {
+        ctx.strokeRect(rm.x + 0.5, rm.y + 0.5, rm.w, rm.h);
+    }
+
+    ctx.strokeStyle = PAPER;
+    ctx.lineWidth = 14;
+    ctx.beginPath();
+    for (const rm of geom.rooms) {
+        const d = rm.door;
+        if (!d) continue;
+        ctx.moveTo(d.x1, d.y1);
+        ctx.lineTo(d.x2, d.y2);
+    }
+    ctx.stroke();
+
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.75;
+    ctx.beginPath();
+    for (const rm of geom.rooms) {
+        const d = rm.door;
+        if (!d) continue;
+        ctx.moveTo(d.mx, d.my);
+        ctx.lineTo(d.mx + d.nx * 28, d.my + d.ny * 28);
+    }
+    ctx.stroke();
+
+    ctx.lineWidth = 3.5;
+    ctx.strokeRect(PLAN.x + 0.5, PLAN.y + 0.5, PLAN.w, PLAN.h);
+
+    for (const rm of geom.rooms) drawLabel(rm);
+
+    drawMarks(duty.orders);
+    drawBand(geom, duty);
+}
+
+function drawLabel(rm) {
+    const cx = rm.x + rm.w / 2;
+    const cy = rm.y + rm.h / 2;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(rm.x + 8, rm.y + 8, Math.max(0, rm.w - 16), Math.max(0, rm.h - 16));
+    ctx.clip();
+    ctx.fillStyle = INK;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    if (rm.program === 'HALL') {
+        const verticalHall = rm.h > rm.w;
+        ctx.font = '700 20px ' + MONO;
+        ctx.letterSpacing = '1px';
+        if (verticalHall) {
+            ctx.translate(rm.x + 28, rm.y + 36);
+            ctx.rotate(-Math.PI / 2);
+            ctx.textAlign = 'right';
+        } else {
+            ctx.textAlign = 'left';
+            ctx.translate(rm.x + 18, cy);
+        }
+        ctx.fillText(pad(rm.n, 2), 0, params.showNames ? -12 : 0);
+        if (params.showNames) {
+            ctx.font = '600 15px ' + SANS;
+            ctx.letterSpacing = '3.5px';
+            ctx.fillText('HALL', 0, 14);
+        }
+        ctx.restore();
+        return;
+    }
+
+    const rotate = rm.h > rm.w * 1.8 && rm.w < 220;
+    if (rotate) {
+        ctx.translate(cx, cy);
+        ctx.rotate(-Math.PI / 2);
+        ctx.font = '700 20px ' + MONO;
+        ctx.letterSpacing = '1px';
+        ctx.fillText(pad(rm.n, 2), 0, params.showNames ? -14 : 0);
+        if (params.showNames) {
+            ctx.font = '600 15px ' + SANS;
+            ctx.letterSpacing = '3px';
+            ctx.fillText(rm.program, 0, 14);
+        }
+        ctx.restore();
+        return;
+    }
+
+    ctx.font = '700 22px ' + MONO;
+    ctx.letterSpacing = '1px';
+    const named = params.showNames && rm.w >= 200 && rm.h >= 120;
+    ctx.fillText(pad(rm.n, 2), cx, named ? cy - 16 : cy);
+    if (named) {
+        ctx.font = '600 16px ' + SANS;
+        ctx.letterSpacing = '2.5px';
+        ctx.fillText(rm.program, cx, cy + 16);
+    }
+    ctx.restore();
+}
+
+function drawMarks(orders) {
+    const by = new Map();
+    for (const o of orders) {
+        if (!by.has(o.room.n)) by.set(o.room.n, []);
+        by.get(o.room.n).push(o);
+    }
+    const size = 22;
+    const gap = 8;
+    const rank = s => (s === 'OPEN' ? 0 : s === 'CREW' ? 1 : 2);
+    for (const list of by.values()) {
+        list.sort((a, b) => rank(a.state) - rank(b.state));
+        const rm = list[0].room;
+        const total = list.length * size + (list.length - 1) * gap;
+        let x = Math.round(rm.x + (rm.w - total) / 2);
+        let y = Math.round(rm.y + rm.h - size - 16);
+        x = Math.max(rm.x + 8, Math.min(x, rm.x + rm.w - size - 8));
+        y = Math.max(rm.y + 8, Math.min(y, rm.y + rm.h - size - 8));
+        list.forEach((o, i) => {
+            const px = x + i * (size + gap);
+            if (px + size > rm.x + rm.w - 6) return;
+            stamp(o, px, y, size);
+        });
+    }
+}
+
+function stamp(o, x, y, size) {
+    if (o.state === 'OPEN') {
+        ctx.fillStyle = ACCENT;
+        ctx.fillRect(x, y, size, size);
+        return;
+    }
+    if (o.state === 'CREW') {
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+        return;
+    }
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.5;
+    const c = size / 2;
+    ctx.beginPath();
+    ctx.moveTo(x + c, y + 2);
+    ctx.lineTo(x + c, y + size - 2);
+    ctx.moveTo(x + 2, y + c);
+    ctx.lineTo(x + size - 2, y + c);
+    ctx.stroke();
+}
+
+function drawBand(geom, duty) {
+    const y = 1052;
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(64, y);
+    ctx.lineTo(1896, y);
+    ctx.stroke();
+
+    /* north mark */
+    ctx.beginPath();
+    ctx.moveTo(108, y + 86);
+    ctx.lineTo(108, y + 40);
+    ctx.moveTo(108, y + 34);
+    ctx.lineTo(100, y + 50);
+    ctx.moveTo(108, y + 34);
+    ctx.lineTo(116, y + 50);
+    ctx.stroke();
+    ctx.fillStyle = INK;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = '700 16px ' + SANS;
+    ctx.letterSpacing = '2px';
+    ctx.fillText('N', 108, y + 118);
+
+    const open = duty.orders.filter(o => o.state === 'OPEN').length;
+    const crew = duty.orders.filter(o => o.state === 'CREW').length;
+
+    ctx.textAlign = 'left';
+    ctx.font = '700 28px ' + SANS;
+    ctx.letterSpacing = '8px';
+    ctx.fillText('DUTY CYCLE', 168, y + 64);
+
+    ctx.fillStyle = MUTE;
+    ctx.font = '400 18px ' + MONO;
+    ctx.letterSpacing = '0.5px';
+    const line = 'seed ' + params.seed
+        + '   ·   day ' + pad(params.day, 3)
+        + '   ·   open ' + pad(open, 2)
+        + '   ·   crew ' + pad(crew, 2);
+    ctx.fillText(line, 168, y + 108);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = INK;
+    ctx.font = 'italic 500 32px ' + SANS;
+    ctx.letterSpacing = '0.5px';
+    ctx.fillText(geom.site, 1896, y + 78);
+
+    ctx.letterSpacing = '0px';
+}
+
+/* ================= THE CONSOLE ================= */
+
+function syncReadouts() {
+    el('roomsVal').textContent = String(params.rooms);
+    el('ageVal').textContent = params.age + ' yr';
+    el('dayVal').textContent = pad(params.day, 3);
+    el('horizonVal').textContent = params.horizon + ' d';
+    el('occVal').textContent = Math.round(params.occupancy * 100) + '%';
+    el('crewVal').textContent = pad(params.crew, 2);
+    el('placardSeed').textContent = String(params.seed);
+}
+
+function renderCensus(census) {
+    el('census').innerHTML = census.map(row =>
+        '<div class="census-row"><span>' + row.id + '</span>'
+        + '<span><strong>' + pad(row.assets, 2) + '</strong> ast</span>'
+        + '<span><strong>' + pad(row.open, 2) + '</strong> open</span>'
+        + '<span><strong>' + pad(row.crew, 2) + '</strong> crew</span></div>'
+    ).join('');
+}
+
+function renderRegister(orders) {
+    const list = el('register');
+    const shown = orders.slice().sort((a, b) => {
+        const rank = s => (s === 'OPEN' ? 0 : s === 'CREW' ? 1 : 2);
+        if (rank(a.state) !== rank(b.state)) return rank(a.state) - rank(b.state);
+        if (a.days !== b.days) return a.days - b.days;
+        return a.room.n - b.room.n;
+    });
+    el('regCount').textContent = pad(shown.length, 2);
+    if (!shown.length) {
+        list.innerHTML = '<li class="empty" style="display:block;cursor:default;border:none;padding:0">No orders in this window.</li>';
+        return;
+    }
+    list.innerHTML = shown.map(o => {
+        const on = o.key === focusKey ? ' is-on' : '';
+        const wo = o.wo == null ? 'PM' : ('WO' + o.wo);
+        const room = pad(o.room.n, 2) + ' ' + o.room.program;
+        return '<li class="' + on.trim() + '" data-key="' + o.key + '">'
+            + '<span>' + wo + '</span>'
+            + '<span>' + o.svc.id + '</span>'
+            + '<span>' + room + '</span>'
+            + '<span>' + pad(o.days, 2) + 'd</span>'
+            + '<span>' + o.state + '</span></li>';
+    }).join('');
+}
+
+function paint() {
+    syncReadouts();
+    const geom = buildGeometry(params.seed, params.rooms);
+    const duty = buildDuty(params.seed, geom, params);
+    drawSheet(geom, duty);
+
+    const open = duty.orders.filter(o => o.state === 'OPEN').length;
+    const crew = duty.orders.filter(o => o.state === 'CREW').length;
+    const pm = duty.orders.filter(o => o.state === 'PM').length;
+    el('topMeta').textContent = geom.site + '  ·  Day ' + pad(params.day, 3) + '  ·  ' + pad(open, 2) + ' Open';
+    el('status').textContent = pad(open, 2) + ' open  ·  ' + pad(crew, 2) + ' with crew  ·  ' + pad(pm, 2) + ' preventive';
+    renderCensus(duty.census);
+    renderRegister(duty.orders);
+
+    document.querySelectorAll('#svcGrid .btn').forEach(b => {
+        b.classList.toggle('is-on', b.dataset.svc === params.service);
+    });
+}
+
+function setDay(n) {
+    const d = Math.max(1, Math.min(365, n));
+    el('dayCtl').value = String(d);
+    paint();
+}
+
+function applySeedFromInput() {
+    const n = parseInt(el('seedInput').value, 10);
+    params.seed = Number.isFinite(n) ? (Math.abs(n) >>> 0) : 0;
+    el('seedInput').value = String(params.seed);
+    focusKey = null;
+    paint();
+}
+
+el('seedInput').addEventListener('change', applySeedFromInput);
+el('seedInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') el('seedInput').blur();
+});
+
+el('rerollBtn').addEventListener('click', () => {
+    /* The single sanctioned Math.random(): choosing where to look next. */
+    params.seed = Math.floor(Math.random() * 100000);
+    el('seedInput').value = String(params.seed);
+    focusKey = null;
+    paint();
+});
+
+['roomsCtl', 'ageCtl', 'dayCtl', 'horizonCtl', 'occCtl', 'crewCtl'].forEach(id => {
+    el(id).addEventListener('input', () => { focusKey = null; paint(); });
+});
+
+el('dayBack').addEventListener('click', () => setDay(params.day - 1));
+el('dayFwd').addEventListener('click', () => setDay(params.day + 1));
+
+el('svcGrid').addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    params.service = btn.dataset.svc;
+    focusKey = null;
+    paint();
+});
+
+el('pmCtl').addEventListener('change', paint);
+el('namesCtl').addEventListener('change', paint);
+
+el('register').addEventListener('click', e => {
+    const row = e.target.closest('li[data-key]');
+    if (!row) return;
+    focusKey = focusKey === row.dataset.key ? null : row.dataset.key;
+    paint();
+});
+
+document.addEventListener('keydown', e => {
+    if (e.target === el('seedInput')) return;
+    if (e.key === 'ArrowRight') { e.preventDefault(); setDay(params.day + 1); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); setDay(params.day - 1); }
+});
+
+el('exportBtn').addEventListener('click', () => {
+    canvas.toBlob(blob => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = exportName('Duty Cycle', params.seed);
+        a.click();
+        URL.revokeObjectURL(a.href);
+    }, 'image/png');
+});
+
+function boot() { paint(); }
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(boot);
+else boot();
+</script>
+</body>
+</html>

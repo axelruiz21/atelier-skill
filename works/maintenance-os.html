@@ -20,17 +20,20 @@
     water, fire — run as parallel risers inside the hall and reach each
     served room by an orthogonal path along the door tree.
 
-    Time is a duty cycle. At the opening of the duty year (plant age ×
-    365 days) every asset samples a Weibull residual life from its own
-    mulberry32 stream: shape is a property of the service, scale shrinks
-    as the plant ages and as occupancy rises. That residual is a fixed
-    calendar date. The day
-    control slides a window of `horizon` days across the calendar; what
-    falls inside is a corrective order. A crew of the chosen size takes
-    the highest priority first — criticality of the program divided by
-    days remaining — and what remains open is the only accent on the
-    sheet. Preventive marks are a second cadence: a seeded phase on each
-    service interval, drawn as quiet crosses, never in the accent.
+    Time is a duty cycle, and a repair is not a new machine. At the
+    opening of the duty year every asset samples a Weibull residual from
+    its own mulberry32 stream: shape belongs to the service, scale
+    shrinks as the plant ages and as occupancy rises. When that residual
+    falls, the asset is repaired and returned to service at 72 percent
+    of the virtual age it had failed at — Kijima’s Type I imperfect
+    repair — and the next residual is drawn from there. The duty year is
+    that sequence. The day control slides a window of `horizon` days
+    across it; the soonest failure inside the window is the corrective
+    order. A crew of the chosen size takes the highest priority first —
+    criticality of the program divided by days remaining — and what
+    remains open is the only accent on the sheet. Preventive marks are
+    a second cadence: a seeded phase on each service interval, drawn as
+    quiet crosses, never in the accent.
 
     The service key is the shift. It does not rebuild the plant; it
     decides which network, and which orders, are on the table. The crew
@@ -49,8 +52,9 @@
     the seed.
 
     Algorithms: mulberry32 · Fisher–Yates shuffle · recursive binary
-    space partition · BFS door tree · orthogonal riser-and-branch ·
-    Weibull conditional residual life · priority dispatch.
+    space partition · BFS door tree · orthogonal door-tree routing ·
+    Weibull conditional residual life · Kijima Type I imperfect repair ·
+    priority dispatch.
 
     Axel Ruiz Design — studio canon (atelier), 2026.
 -->
@@ -96,7 +100,7 @@
     }
     #canvas-container {
         width: 100%;
-        max-width: min(980px, calc(50vh * 1960 / 1260));
+        max-width: min(980px, calc(54vh * 1960 / 1260));
         border: 1px solid var(--line-strong);
         background: #fff; line-height: 0;
     }
@@ -120,7 +124,7 @@
 
     .caption {
         width: 100%;
-        max-width: min(980px, calc(50vh * 1960 / 1260));
+        max-width: min(980px, calc(54vh * 1960 / 1260));
         display: flex; flex-direction: column; gap: 14px;
     }
     .placard {
@@ -213,9 +217,19 @@
     .census-row strong { font-weight: 400; color: var(--ink); }
 
     .ledger { border-top: 1px solid var(--line-strong); padding-top: 12px; }
-    .ledger-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+    .ledger-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
     .ledger-head .title { font-size: 11px; font-weight: 600; letter-spacing: 0.26em; text-transform: uppercase; }
     .ledger-head .count { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; }
+    .reg-head {
+        display: grid;
+        grid-template-columns: 92px 52px 1fr 56px 64px;
+        gap: 8px;
+        padding: 0 2px 6px;
+        border-bottom: 1px solid var(--line);
+        font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+        text-transform: uppercase; color: var(--mute);
+    }
+    .reg-head span:nth-child(n+4) { text-align: right; }
 
     .register { list-style: none; max-height: 148px; overflow-y: auto; }
     .register li {
@@ -268,7 +282,7 @@
                 <div class="placard-line" id="placardLine">
                     seed <span class="accent" id="placardSeed">4271</span>
                     · weibull residual / bsp plan
-                    · door-tree risers
+                    · kijima repair / door-tree risers
                     · 1960&times;1260
                     · 2026
                 </div>
@@ -277,6 +291,9 @@
                 <div class="ledger-head">
                     <span class="title">Register</span>
                     <span class="count" id="regCount">00</span>
+                </div>
+                <div class="reg-head" aria-hidden="true">
+                    <span>Order</span><span>Sys</span><span>Room</span><span>Due</span><span>State</span>
                 </div>
                 <ul class="register" id="register"></ul>
             </div>
@@ -461,10 +478,10 @@ const DECK = [
 ];
 
 const SERVICES = [
-    { id: 'AIR', name: 'Air',   k: 1.28, life: 980,  every: 160 },
-    { id: 'PWR', name: 'Power', k: 1.12, life: 1240, every: 220 },
-    { id: 'WTR', name: 'Water', k: 1.22, life: 1080, every: 180 },
-    { id: 'FIR', name: 'Fire',  k: 1.55, life: 1680, every: 320 },
+    { id: 'AIR', name: 'Air',   k: 1.55, life: 1180, every: 130 },
+    { id: 'PWR', name: 'Power', k: 1.32, life: 1480, every: 190 },
+    { id: 'WTR', name: 'Water', k: 1.44, life: 1280, every: 150 },
+    { id: 'FIR', name: 'Fire',  k: 1.72, life: 1880, every: 280 },
 ];
 
 const canvas = document.getElementById('sheet');
@@ -679,18 +696,25 @@ function gapOf(e, child) {
     return { x1, y1, x2, y2, mx, my, nx: dx / hyp, ny: dy / hyp };
 }
 
-/* Inverse CDF of a Weibull left-truncated at T. Residual is days after T. */
+/* Inverse CDF of a Weibull left-truncated at virtual age T.
+   Residual is days after T. Kijima’s Type I repair returns the asset
+   at REPAIR of the virtual age it failed at, so the next draw is
+   longer than a brand-new life and shorter than no repair at all. */
+const REPAIR = 0.72;
+
 function weibullResidual(u, T, lambda, k) {
     const uu = Math.min(1 - 1e-12, Math.max(1e-12, u));
-    const Tk = Math.pow(T / lambda, k);
+    const age = Math.max(T, 0);
+    const Tk = Math.pow(age / lambda, k);
     const tk = Tk - Math.log(1 - uu);
-    return lambda * Math.pow(tk, 1 / k) - T;
+    const t = lambda * Math.pow(Math.max(tk, 0), 1 / k);
+    return t - age;
 }
 
 function buildDuty(seed, geom, p) {
     const T = p.age * 365;
     const load = 0.55 + 0.90 * p.occupancy;
-    const ageFactor = 0.42 + Math.pow(p.age / 30, 1.18);
+    const ageFactor = 0.45 + Math.pow(p.age / 32, 1.15);
     const assets = [];
     for (const rm of geom.rooms) {
         for (let si = 0; si < SERVICES.length; si++) {
@@ -699,9 +723,21 @@ function buildDuty(seed, geom, p) {
             const present = rm.program === 'MECH' || ar() < rm.aff[si];
             if (!present) continue;
             const lambda = svc.life / (load * ageFactor);
-            const residual = weibullResidual(ar(), T, lambda, svc.k);
+            /* Virtual age at the opening of the duty year. A fraction of
+               the plant's age, so a repaired asset is worn but not new. */
+            let vAge = T * (0.35 + 0.65 * ar());
+            const failures = [];
+            let clock = 0;
+            for (let cycle = 0; cycle < 16 && clock < 420; cycle++) {
+                const dt = weibullResidual(ar(), vAge, lambda, svc.k);
+                if (!isFinite(dt) || dt < 1) break;
+                clock += dt;
+                if (clock >= 420) break;
+                failures.push(clock);
+                vAge = (vAge + dt) * REPAIR;
+            }
             const phase = ar();
-            assets.push({ rm, si, svc, residual, phase, crit: rm.crit });
+            assets.push({ rm, si, svc, failures, phase, crit: rm.crit });
         }
     }
 
@@ -712,16 +748,25 @@ function buildDuty(seed, geom, p) {
     const origin = p.day - 1;
     const orders = [];
     for (const a of visible) {
-        const days = a.residual - origin;
-        if (days >= 0 && days < p.horizon) {
+        /* The soonest failure inside the horizon. Later cycles stay on
+           the calendar and surface when the window reaches them. */
+        let hit = null;
+        let cycle = 0;
+        for (let i = 0; i < a.failures.length; i++) {
+            const due = a.failures[i] - origin;
+            if (due < 0) continue;
+            if (due < p.horizon) { hit = due; cycle = i; }
+            break;
+        }
+        if (hit != null) {
             orders.push({
                 kind: 'COR',
-                days,
+                days: hit,
                 room: a.rm,
                 svc: a.svc,
                 crit: a.crit,
-                wo: (mix(seed, a.rm.n * 17 + a.si + 1) % 800) + 100,
-                key: a.rm.n + '-' + a.svc.id,
+                wo: (mix(seed, a.rm.n * 17 + a.si + 1 + cycle * 97) % 800) + 100,
+                key: a.rm.n + '-' + a.svc.id + '-' + cycle,
             });
         }
         if (p.showPM) {
@@ -771,28 +816,62 @@ function buildDuty(seed, geom, p) {
 
 /* ================= THE SHEET ================= */
 
-/* Orthogonal route along doorways, so the filament misses the room name. */
+/* Break any diagonal into an L, so every filament is a ruled line. */
+function orthogonalize(pts) {
+    const out = [];
+    for (const p of pts) {
+        if (!out.length) { out.push(p); continue; }
+        const a = out[out.length - 1];
+        if (Math.abs(a.x - p.x) < 0.5 && Math.abs(a.y - p.y) < 0.5) continue;
+        if (Math.abs(a.x - p.x) > 0.5 && Math.abs(a.y - p.y) > 0.5) {
+            out.push({ x: p.x, y: a.y });
+        }
+        out.push(p);
+    }
+    return out;
+}
+
+function segmentsOf(poly) {
+    const segs = [];
+    for (let i = 0; i < poly.length - 1; i++) {
+        const A = poly[i], B = poly[i + 1];
+        if (Math.abs(A.x - B.x) < 0.5 && Math.abs(A.y - B.y) < 0.5) continue;
+        segs.push([A.x, A.y, B.x, B.y]);
+    }
+    return segs;
+}
+
+/* Door-tree route, inset off the wall so the filament survives the
+   wall stroke. A stub sits inside the served room; each ancestor is
+   marked just inside its own door; the run enters the hall and elbows
+   once to that service's riser. */
 function routeToRiser(rm, hall, riser) {
-    const poly = [];
+    const pts = [];
     if (rm.door) {
-        poly.push({
-            x: rm.door.mx + rm.door.nx * 22,
-            y: rm.door.my + rm.door.ny * 22,
+        pts.push({
+            x: rm.door.mx + rm.door.nx * 28,
+            y: rm.door.my + rm.door.ny * 28,
         });
-        poly.push({ x: rm.door.mx, y: rm.door.my });
     } else {
-        poly.push({ x: rm.x + rm.w / 2, y: rm.y + rm.h / 2 });
+        pts.push({ x: rm.x + rm.w / 2, y: rm.y + rm.h / 2 });
     }
     let cur = rm;
     let guard = 0;
     while (cur.parent && cur.parent !== hall && guard++ < 24) {
         const d = cur.parent.door;
-        if (d) poly.push({ x: d.mx, y: d.my });
+        if (d) pts.push({ x: d.mx + d.nx * 22, y: d.my + d.ny * 22 });
         cur = cur.parent;
     }
-    const a = poly[poly.length - 1];
-    poly.push({ x: riser.x, y: a.y }, { x: riser.x, y: riser.y });
-    return poly;
+    if (cur && cur.door) {
+        pts.push({
+            x: cur.door.mx - cur.door.nx * 20,
+            y: cur.door.my - cur.door.ny * 20,
+        });
+    }
+    const chase = orthogonalize(pts);
+    const last = chase.length ? chase[chase.length - 1] : pts[0];
+    const fan = orthogonalize([last, { x: riser.x, y: riser.y }]);
+    return { chase, fan };
 }
 
 function serviceLayers(geom, assets) {
@@ -814,19 +893,13 @@ function serviceLayers(geom, assets) {
             : [hall.x + 22, riser.y, hall.x + hall.w - 22, riser.y];
         for (const a of assets) {
             if (a.si !== si || a.rm === hall || !a.rm.parent) continue;
-            const poly = routeToRiser(a.rm, hall, riser);
-            const fanAt = Math.max(1, poly.length - 2);
-            for (let i = 0; i < fanAt - 1; i++) {
-                const A = poly[i], B = poly[i + 1];
-                if (Math.abs(A.x - B.x) < 0.5 && Math.abs(A.y - B.y) < 0.5) continue;
-                const k = [A.x, A.y, B.x, B.y].map(n => Math.round(n)).join(',');
-                const k2 = [B.x, B.y, A.x, A.y].map(n => Math.round(n)).join(',');
-                if (!chase.has(k) && !chase.has(k2)) chase.set(k, [A.x, A.y, B.x, B.y]);
+            const route = routeToRiser(a.rm, hall, riser);
+            for (const seg of segmentsOf(route.chase)) {
+                const k = seg.map(n => Math.round(n)).join(',');
+                const k2 = [seg[2], seg[3], seg[0], seg[1]].map(n => Math.round(n)).join(',');
+                if (!chase.has(k) && !chase.has(k2)) chase.set(k, seg);
             }
-            for (let i = fanAt - 1; i < poly.length - 1; i++) {
-                const A = poly[i], B = poly[i + 1];
-                fans[si].push([A.x, A.y, B.x, B.y]);
-            }
+            for (const seg of segmentsOf(route.fan)) fans[si].push(seg);
         }
     }
     return { chase: Array.from(chase.values()), fans, trunks };
@@ -858,8 +931,8 @@ function drawSheet(geom, duty) {
     ctx.beginPath();
     ctx.rect(PLAN.x, PLAN.y, PLAN.w, PLAN.h);
     ctx.clip();
-    ctx.strokeStyle = 'rgba(17,17,17,0.55)';
-    ctx.lineWidth = 2.25;
+    ctx.strokeStyle = 'rgba(17,17,17,0.82)';
+    ctx.lineWidth = 2.5;
     strokeSegs(layers.chase);
     ctx.strokeStyle = params.service === 'ALL' ? 'rgba(17,17,17,0.75)' : INK;
     ctx.lineWidth = params.service === 'ALL' ? 2 : 3;
@@ -909,6 +982,16 @@ function drawSheet(geom, duty) {
     drawBand(geom, duty);
 }
 
+/* A paper plate behind the name, so a riser never strikes the type. */
+function plateText(text, x, y, font, align) {
+    ctx.font = font;
+    ctx.letterSpacing = '0px';
+    const w = ctx.measureText(text).width + 18;
+    const left = align === 'left' ? x - 6 : x - w / 2 - 8;
+    ctx.fillStyle = PAPER;
+    ctx.fillRect(left, y - 14, w + 16, 28);
+}
+
 function drawLabel(rm) {
     const cx = rm.x + rm.w / 2;
     const cy = rm.y + rm.h / 2;
@@ -932,8 +1015,14 @@ function drawLabel(rm) {
             ctx.textAlign = 'left';
             ctx.translate(rm.x + 18, cy);
         }
+        plateText(pad(rm.n, 2), 0, params.showNames ? -12 : 0, '700 20px ' + MONO, 'left');
+        ctx.fillStyle = INK;
+        ctx.font = '700 20px ' + MONO;
+        ctx.letterSpacing = '1px';
         ctx.fillText(pad(rm.n, 2), 0, params.showNames ? -12 : 0);
         if (params.showNames) {
+            plateText('HALL', 0, 14, '600 15px ' + SANS, 'left');
+            ctx.fillStyle = INK;
             ctx.font = '600 15px ' + SANS;
             ctx.letterSpacing = '3.5px';
             ctx.fillText('HALL', 0, 14);
@@ -948,8 +1037,14 @@ function drawLabel(rm) {
         ctx.rotate(-Math.PI / 2);
         ctx.font = '700 20px ' + MONO;
         ctx.letterSpacing = '1px';
+        plateText(pad(rm.n, 2), 0, params.showNames ? -14 : 0, '700 20px ' + MONO, 'center');
+        ctx.fillStyle = INK;
+        ctx.font = '700 20px ' + MONO;
+        ctx.letterSpacing = '1px';
         ctx.fillText(pad(rm.n, 2), 0, params.showNames ? -14 : 0);
         if (params.showNames) {
+            plateText(rm.program, 0, 14, '600 15px ' + SANS, 'center');
+            ctx.fillStyle = INK;
             ctx.font = '600 15px ' + SANS;
             ctx.letterSpacing = '3px';
             ctx.fillText(rm.program, 0, 14);
@@ -958,11 +1053,15 @@ function drawLabel(rm) {
         return;
     }
 
+    const named = params.showNames && rm.w >= 200 && rm.h >= 120;
+    plateText(pad(rm.n, 2), cx, named ? cy - 16 : cy, '700 22px ' + MONO, 'center');
+    ctx.fillStyle = INK;
     ctx.font = '700 22px ' + MONO;
     ctx.letterSpacing = '1px';
-    const named = params.showNames && rm.w >= 200 && rm.h >= 120;
     ctx.fillText(pad(rm.n, 2), cx, named ? cy - 16 : cy);
     if (named) {
+        plateText(rm.program, cx, cy + 16, '600 16px ' + SANS, 'center');
+        ctx.fillStyle = INK;
         ctx.font = '600 16px ' + SANS;
         ctx.letterSpacing = '2.5px';
         ctx.fillText(rm.program, cx, cy + 16);

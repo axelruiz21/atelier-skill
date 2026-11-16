@@ -46,6 +46,11 @@
     The sheet is top-aligned in the stage, a deliberate break from the
     centered armature, so the placard and the register stay on the
     first screen with the plan. The frame still does not perform.
+    The canvas does. A display clock, not a seed, drives three motions:
+    dashed current along the services, a call traveling the door tree
+    for every open order, and a crew mark that walks out and back.
+    Run advances the duty day; Hold stops the calendar. Export is taken
+    at phase zero, so the edition is still seed and parameters alone.
 
     Nothing in the composition touches Math.random(), except the Reroll
     control, which only chooses the next seed. The sheet is rasterized
@@ -175,7 +180,7 @@
     .btn.accent { border-color: var(--accent); color: var(--accent); }
     .btn.accent:hover { background: var(--accent); color: var(--paper); border-color: var(--accent); }
     .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .btn-row.day { margin-bottom: 14px; }
+    .btn-row.day { grid-template-columns: 1fr 1fr 1fr; margin-bottom: 14px; }
     .svc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .svc-grid .wide { grid-column: 1 / -1; }
     .stack > * { margin-bottom: 8px; }
@@ -340,6 +345,7 @@
             </div>
             <div class="btn-row day">
                 <button class="btn" id="dayBack" type="button">Day −</button>
+                <button class="btn is-on" id="runBtn" type="button" aria-pressed="true">Hold</button>
                 <button class="btn" id="dayFwd" type="button">Day +</button>
             </div>
             <div class="field">
@@ -884,6 +890,7 @@ function serviceLayers(geom, assets) {
     const hall = geom.hall;
     const chase = new Map();
     const fans = [[], [], [], []];
+    const fanRoom = [[], [], [], []];
     const trunks = [null, null, null, null];
     const present = [false, false, false, false];
     for (const a of assets) present[a.si] = true;
@@ -905,10 +912,13 @@ function serviceLayers(geom, assets) {
                 const k2 = [seg[2], seg[3], seg[0], seg[1]].map(n => Math.round(n)).join(',');
                 if (!chase.has(k) && !chase.has(k2)) chase.set(k, seg);
             }
-            for (const seg of segmentsOf(route.fan)) fans[si].push(seg);
+            for (const seg of segmentsOf(route.fan)) {
+                fans[si].push(seg);
+                fanRoom[si].push(a.rm.n);
+            }
         }
     }
-    return { chase: Array.from(chase.values()), fans, trunks };
+    return { chase: Array.from(chase.values()), fans, fanRoom, trunks };
 }
 
 function strokeSegs(segs) {
@@ -921,26 +931,122 @@ function strokeSegs(segs) {
     ctx.stroke();
 }
 
-function drawSheet(geom, duty) {
+/* Display speeds, px/s. Air is the quick utility, safety the slow watch.
+   Not part of the seed: the same parameters export the same settled sheet. */
+const FLOW = [168, 112, 74, 46];
+const DASH = 16;
+const GAP = 22;
+
+const motion = { t: 0, year: 0 };
+
+function strokeFlow(segs, speed, color, width, t) {
+    if (!segs.length) return;
+    const period = DASH + GAP;
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.setLineDash([DASH, GAP]);
+    ctx.lineDashOffset = -((t * speed) % period);
+    strokeSegs(segs);
+    ctx.restore();
+}
+
+function supplyPath(rm, hall, si) {
+    const off = (si - 1.5) * 9;
+    const riser = hall.h >= hall.w
+        ? { x: Math.round(hall.x + hall.w / 2 + off), y: Math.round(hall.y + hall.h / 2) }
+        : { x: Math.round(hall.x + hall.w / 2), y: Math.round(hall.y + hall.h / 2 + off) };
+    const route = routeToRiser(rm, hall, riser);
+    const pts = [];
+    const push = p => {
+        const last = pts[pts.length - 1];
+        if (!last || Math.hypot(last.x - p.x, last.y - p.y) > 0.5) pts.push(p);
+    };
+    for (let i = route.fan.length - 1; i >= 0; i--) push(route.fan[i]);
+    for (let i = route.chase.length - 1; i >= 0; i--) push(route.chase[i]);
+    if (!pts.length) pts.push(riser);
+    return pts;
+}
+
+function pointAlong(pts, dist) {
+    let d = dist;
+    for (let i = 1; i < pts.length; i++) {
+        const len = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+        if (d <= len || i === pts.length - 1) {
+            const u = len ? Math.min(1, d / len) : 0;
+            return {
+                x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * u,
+                y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * u,
+            };
+        }
+        d -= len;
+    }
+    return pts[0];
+}
+
+function pathLength(pts) {
+    let L = 0;
+    for (let i = 1; i < pts.length; i++) {
+        L += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    }
+    return L;
+}
+
+function drawTravelers(geom, orders, t) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(PLAN.x + 3, PLAN.y + 3, PLAN.w - 6, PLAN.h - 6);
+    ctx.clip();
+    const size = 16;
+    for (const o of orders) {
+        if (o.state !== 'OPEN' && o.state !== 'CREW') continue;
+        if (o.room === geom.hall || !o.room.parent) continue;
+        const si = SERVICES.findIndex(s => s.id === o.svc.id);
+        if (si < 0) continue;
+        const pts = supplyPath(o.room, geom.hall, si);
+        const L = pathLength(pts);
+        if (L < 8) continue;
+        let dist;
+        if (o.state === 'CREW') {
+            const u = (t / 5.6 + o.room.n * 0.09) % 1;
+            const ping = u < 0.5 ? u * 2 : 2 - u * 2;
+            dist = ping * L;
+        } else {
+            dist = ((t / 3.1 + o.room.n * 0.13) % 1) * L;
+        }
+        const p = pointAlong(pts, dist);
+        ctx.fillStyle = o.state === 'OPEN' ? ACCENT : INK;
+        ctx.fillRect(Math.round(p.x - size / 2), Math.round(p.y - size / 2), size, size);
+    }
+    ctx.restore();
+}
+
+function drawSheet(geom, duty, t) {
     ctx.fillStyle = PAPER;
     ctx.fillRect(0, 0, W, H);
     ctx.lineCap = 'butt';
     ctx.lineJoin = 'miter';
     ctx.letterSpacing = '0px';
+    ctx.setLineDash([]);
 
     const showSvc = params.service === 'ALL'
         ? [0, 1, 2, 3]
         : [SERVICES.findIndex(s => s.id === params.service)];
     const layers = serviceLayers(geom, duty.assets);
 
+    const hot = new Set();
+    for (const o of duty.orders) {
+        if (o.state === 'OPEN') hot.add(o.svc.id + ':' + o.room.n);
+    }
+
     ctx.save();
     ctx.beginPath();
     ctx.rect(PLAN.x, PLAN.y, PLAN.w, PLAN.h);
     ctx.clip();
-    ctx.strokeStyle = 'rgba(17,17,17,0.82)';
+    ctx.strokeStyle = 'rgba(17,17,17,0.28)';
     ctx.lineWidth = 2.5;
     strokeSegs(layers.chase);
-    ctx.strokeStyle = params.service === 'ALL' ? 'rgba(17,17,17,0.75)' : INK;
+    ctx.strokeStyle = params.service === 'ALL' ? 'rgba(17,17,17,0.22)' : 'rgba(17,17,17,0.28)';
     ctx.lineWidth = params.service === 'ALL' ? 2 : 3;
     showSvc.forEach(si => {
         if (si < 0) return;
@@ -982,9 +1088,33 @@ function drawSheet(geom, duty) {
     ctx.lineWidth = 3.5;
     ctx.strokeRect(PLAN.x + 0.5, PLAN.y + 0.5, PLAN.w, PLAN.h);
 
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(PLAN.x + 3, PLAN.y + 3, PLAN.w - 6, PLAN.h - 6);
+    ctx.clip();
+    ctx.setLineDash([]);
+    strokeFlow(layers.chase, 120, 'rgba(17,17,17,0.88)', 2.75, t || 0);
+    showSvc.forEach(si => {
+        if (si < 0) return;
+        const cold = [];
+        const live = [];
+        const id = SERVICES[si].id;
+        layers.fans[si].forEach((seg, i) => {
+            const n = layers.fanRoom[si][i];
+            if (hot.has(id + ':' + n)) live.push(seg);
+            else cold.push(seg);
+        });
+        const trunk = layers.trunks[si] ? [layers.trunks[si]] : [];
+        const ink = params.service === 'ALL' ? 'rgba(17,17,17,0.92)' : INK;
+        strokeFlow(trunk.concat(cold), FLOW[si], ink, params.service === 'ALL' ? 2.5 : 3.25, t || 0);
+        strokeFlow(live, FLOW[si] * 1.35, ACCENT, 3.25, t || 0);
+    });
+    ctx.restore();
+
     for (const rm of geom.rooms) drawLabel(rm);
 
-    drawMarks(duty.orders);
+    drawTravelers(geom, duty.orders, t || 0);
+    drawMarks(duty.orders, t || 0);
     drawBand(geom, duty);
 }
 
@@ -1075,7 +1205,7 @@ function drawLabel(rm) {
     ctx.restore();
 }
 
-function drawMarks(orders) {
+function drawMarks(orders, t) {
     const by = new Map();
     for (const o of orders) {
         if (!by.has(o.room.n)) by.set(o.room.n, []);
@@ -1092,18 +1222,31 @@ function drawMarks(orders) {
         let y = Math.round(rm.y + rm.h - size - 16);
         x = Math.max(rm.x + 8, Math.min(x, rm.x + rm.w - size - 8));
         y = Math.max(rm.y + 8, Math.min(y, rm.y + rm.h - size - 8));
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(rm.x + 2, rm.y + 2, rm.w - 4, rm.h - 4);
+        ctx.clip();
         list.forEach((o, i) => {
             const px = x + i * (size + gap);
             if (px + size > rm.x + rm.w - 6) return;
-            stamp(o, px, y, size);
+            stamp(o, px, y, size, t);
         });
+        ctx.restore();
     }
 }
 
-function stamp(o, x, y, size) {
+function stamp(o, x, y, size, t) {
     if (o.state === 'OPEN') {
         ctx.fillStyle = ACCENT;
         ctx.fillRect(x, y, size, size);
+        const p = (Math.sin((t || 0) * 3.6 + o.room.n) + 1) / 2;
+        ctx.save();
+        ctx.strokeStyle = ACCENT;
+        ctx.globalAlpha = 0.9 * (1 - p);
+        ctx.lineWidth = 2;
+        const g = 3 + p * 16;
+        ctx.strokeRect(x - g + 0.5, y - g + 0.5, size + g * 2, size + g * 2);
+        ctx.restore();
         return;
     }
     if (o.state === 'CREW') {
@@ -1165,6 +1308,21 @@ function drawBand(geom, duty) {
         + '   ·   crew ' + pad(crew, 2);
     ctx.fillText(line, 168, y + 108);
 
+    const x0 = 168;
+    const x1 = 1040;
+    const frac = Math.min(1, Math.max(0, motion.year));
+    ctx.strokeStyle = 'rgba(17,17,17,0.18)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x0, y + 132);
+    ctx.lineTo(x1, y + 132);
+    ctx.stroke();
+    ctx.strokeStyle = INK;
+    ctx.beginPath();
+    ctx.moveTo(x0, y + 132);
+    ctx.lineTo(x0 + (x1 - x0) * frac, y + 132);
+    ctx.stroke();
+
     ctx.textAlign = 'right';
     ctx.fillStyle = INK;
     ctx.font = 'italic 500 32px ' + SANS;
@@ -1221,23 +1379,70 @@ function renderRegister(orders) {
     }).join('');
 }
 
+let view = null;
+let sig = '';
+let running = true;
+let raf = 0;
+let lastTick = 0;
+let carry = 0;
+const STEP = 680;
+
+function signature() {
+    return [
+        params.seed, params.rooms, params.age, params.day, params.horizon,
+        params.occupancy, params.crew, params.service,
+        params.showPM ? 1 : 0, params.showNames ? 1 : 0,
+    ].join(':');
+}
+
+function syncRun() {
+    const b = el('runBtn');
+    b.textContent = running ? 'Hold' : 'Run';
+    b.classList.toggle('is-on', running);
+    b.setAttribute('aria-pressed', running ? 'true' : 'false');
+}
+
 function paint() {
     syncReadouts();
     const geom = buildGeometry(params.seed, params.rooms);
     const duty = buildDuty(params.seed, geom, params);
-    drawSheet(geom, duty);
+    view = { geom, duty };
+    sig = signature();
 
     const open = duty.orders.filter(o => o.state === 'OPEN').length;
     const crew = duty.orders.filter(o => o.state === 'CREW').length;
     const pm = duty.orders.filter(o => o.state === 'PM').length;
     el('topMeta').textContent = geom.site + '  ·  Day ' + pad(params.day, 3) + '  ·  ' + pad(open, 2) + ' Open';
-    el('status').textContent = pad(open, 2) + ' open  ·  ' + pad(crew, 2) + ' with crew  ·  ' + pad(pm, 2) + ' preventive';
+    const tail = running ? '  ·  running' : '  ·  held';
+    el('status').textContent = pad(open, 2) + ' open  ·  ' + pad(crew, 2) + ' with crew  ·  ' + pad(pm, 2) + ' preventive' + tail;
     renderCensus(duty.census);
     renderRegister(duty.orders);
+    syncRun();
 
     document.querySelectorAll('#svcGrid .btn').forEach(b => {
         b.classList.toggle('is-on', b.dataset.svc === params.service);
     });
+}
+
+function loop(now) {
+    if (!lastTick) lastTick = now;
+    const dt = now - lastTick;
+    lastTick = now;
+    if (running) {
+        carry += dt;
+        if (carry >= STEP) {
+            const jumps = Math.min(6, Math.floor(carry / STEP));
+            carry -= jumps * STEP;
+            let d = params.day;
+            for (let i = 0; i < jumps; i++) d = d >= 365 ? 1 : d + 1;
+            el('dayCtl').value = String(d);
+        }
+    }
+    if (!view || signature() !== sig) paint();
+    motion.t = now / 1000;
+    motion.year = ((params.day - 1) + (running ? carry / STEP : 0)) / 365;
+    drawSheet(view.geom, view.duty, motion.t);
+    raf = requestAnimationFrame(loop);
 }
 
 function setDay(n) {
@@ -1273,6 +1478,12 @@ el('rerollBtn').addEventListener('click', () => {
 
 el('dayBack').addEventListener('click', () => setDay(params.day - 1));
 el('dayFwd').addEventListener('click', () => setDay(params.day + 1));
+el('runBtn').addEventListener('click', () => {
+    running = !running;
+    carry = 0;
+    syncRun();
+    if (view) paint();
+});
 
 el('svcGrid').addEventListener('click', e => {
     const btn = e.target.closest('button');
@@ -1296,19 +1507,30 @@ document.addEventListener('keydown', e => {
     if (e.target === el('seedInput')) return;
     if (e.key === 'ArrowRight') { e.preventDefault(); setDay(params.day + 1); }
     if (e.key === 'ArrowLeft') { e.preventDefault(); setDay(params.day - 1); }
+    if (e.key === ' ' && e.target === document.body) {
+        e.preventDefault();
+        el('runBtn').click();
+    }
 });
 
 el('exportBtn').addEventListener('click', () => {
+    cancelAnimationFrame(raf);
+    if (view) {
+        motion.year = (params.day - 1) / 365;
+        drawSheet(view.geom, view.duty, 0);
+    }
     canvas.toBlob(blob => {
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = exportName('Duty Cycle', params.seed);
         a.click();
         URL.revokeObjectURL(a.href);
+        lastTick = 0;
+        raf = requestAnimationFrame(loop);
     }, 'image/png');
 });
 
-function boot() { paint(); }
+function boot() { raf = requestAnimationFrame(loop); }
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(boot);
 else boot();
 </script>

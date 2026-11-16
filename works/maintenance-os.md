@@ -26,10 +26,16 @@ crib. What the crew cannot take stays open, and only the open orders
 carry the accent. Preventive marks are a second, quieter cadence,
 phased on each service interval.
 
-The services run square. From each served cell a stub leaves the door,
-the path follows the door tree doorway to doorway, and a single elbow
-joins the riser in the aisle. Names sit on a paper plate, so a filament
-never strikes the type.
+The services run square, and they run. A display clock, outside the
+seed, drives the sheet: current dashes along plant air, power, coolant,
+and safety; an accent call travels the door tree toward every open
+order; a crew mark walks out to the cell and back. Open stamps pulse.
+Run advances the duty day through the year and wraps; Hold stops the
+calendar and leaves the current moving. From each served cell a stub
+leaves the door, the path follows the door tree doorway to doorway, and
+a single elbow joins the riser in the aisle. Names sit on a paper plate,
+so a filament never strikes the type. Export is taken at phase zero, so
+the edition stays a function of seed and parameters alone.
 
 The same seed, the same plant, the same day, the same crew: the same
 sheet, exactly. Reroll does not stir the drawing; it only chooses the

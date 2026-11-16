@@ -9,31 +9,33 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,500;0,600;0,700;1,500&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <!--
     MAINTENANCE OS — DUTY CYCLE
-    A seeded operating picture of a building under maintenance.
+    A seeded operating picture of a robotics and manufacturing plant
+    under maintenance.
 
-    The plant is grown, not drawn. One integer seed cuts a circulation
-    hall through a rectangular plate, then partitions each wing by
-    recursive binary space division until the room count is met. A
-    breadth-first door tree hangs every room back onto the hall, so the
-    plan reads as a building rather than a treemap. The room nearest the
-    centroid becomes the mechanical core. Four services — air, power,
-    water, fire — run as parallel risers inside the hall and reach each
-    served room by an orthogonal path along the door tree.
+    The floor is grown, not drawn. One integer seed cuts a main aisle
+    through a rectangular plate, then partitions each wing into cells by
+    recursive binary space division until the cell count is met. A
+    breadth-first door tree hangs every cell back onto the aisle, so the
+    plan reads as a plant rather than a treemap. The cell nearest the
+    centroid becomes the mechanical core. Four services — plant air,
+    servo power, coolant, and safety — run as parallel risers inside the
+    aisle and reach each served cell by an orthogonal path along the
+    door tree.
 
     Time is a duty cycle, and a repair is not a new machine. At the
     opening of the duty year every asset samples a Weibull residual from
     its own mulberry32 stream: shape belongs to the service, scale
-    shrinks as the plant ages and as occupancy rises. When that residual
-    falls, the asset is repaired and returned to service at 72 percent
-    of the virtual age it had failed at — Kijima’s Type I imperfect
-    repair — and the next residual is drawn from there. The duty year is
-    that sequence. The day control slides a window of `horizon` days
-    across it; the soonest failure inside the window is the corrective
-    order. A crew of the chosen size takes the highest priority first —
-    criticality of the program divided by days remaining — and what
-    remains open is the only accent on the sheet. Preventive marks are
-    a second cadence: a seeded phase on each service interval, drawn as
-    quiet crosses, never in the accent.
+    shrinks as the plant ages and as utilization rises. When that
+    residual falls, the asset is repaired and returned to service at 72
+    percent of the virtual age it had failed at — Kijima’s Type I
+    imperfect repair — and the next residual is drawn from there. The
+    duty year is that sequence. The day control slides a window of
+    `horizon` days across it; the soonest failure inside the window is
+    the corrective order. A crew of the chosen size takes the highest
+    priority first — criticality of the cell divided by days remaining —
+    and what remains open is the only accent on the sheet. Preventive
+    marks are a second cadence: a seeded phase on each service interval,
+    drawn as quiet crosses, never in the accent.
 
     The service key is the shift. It does not rebuild the plant; it
     decides which network, and which orders, are on the table. The crew
@@ -293,7 +295,7 @@
                     <span class="count" id="regCount">00</span>
                 </div>
                 <div class="reg-head" aria-hidden="true">
-                    <span>Order</span><span>Sys</span><span>Room</span><span>Due</span><span>State</span>
+                    <span>Order</span><span>Sys</span><span>Cell</span><span>Due</span><span>State</span>
                 </div>
                 <ul class="register" id="register"></ul>
             </div>
@@ -318,10 +320,10 @@
             </div>
             <div class="field">
                 <div class="field-label">
-                    <span class="name">Rooms</span>
+                    <span class="name">Cells</span>
                     <span class="val" id="roomsVal">14</span>
                 </div>
-                <input type="range" id="roomsCtl" min="8" max="20" step="1" value="14" aria-label="Rooms">
+                <input type="range" id="roomsCtl" min="8" max="20" step="1" value="14" aria-label="Cells">
             </div>
             <div class="field">
                 <div class="field-label">
@@ -356,10 +358,10 @@
             </div>
             <div class="field">
                 <div class="field-label">
-                    <span class="name">Occupancy</span>
+                    <span class="name">Utilization</span>
                     <span class="val" id="occVal">62%</span>
                 </div>
-                <input type="range" id="occCtl" min="0" max="100" step="1" value="62" aria-label="Occupancy">
+                <input type="range" id="occCtl" min="0" max="100" step="1" value="62" aria-label="Utilization">
             </div>
             <div class="field">
                 <div class="field-label">
@@ -378,15 +380,15 @@
                 <button class="btn is-on wide" type="button" data-svc="ALL">All Services</button>
                 <button class="btn" type="button" data-svc="AIR">Air</button>
                 <button class="btn" type="button" data-svc="PWR">Power</button>
-                <button class="btn" type="button" data-svc="WTR">Water</button>
-                <button class="btn" type="button" data-svc="FIR">Fire</button>
+                <button class="btn" type="button" data-svc="CLT">Coolant</button>
+                <button class="btn" type="button" data-svc="SAF">Safety</button>
             </div>
             <label class="toggle">
                 <span class="name">Preventive</span>
                 <input type="checkbox" id="pmCtl" checked>
             </label>
             <label class="toggle">
-                <span class="name">Room Names</span>
+                <span class="name">Cell Names</span>
                 <input type="checkbox" id="namesCtl" checked>
             </label>
             <div class="census" id="census"></div>
@@ -452,36 +454,40 @@ const MUTE = '#8a8a86';
 const ACCENT = '#1f4a2b';
 
 const SITES = [
-    'North Stack', 'River Court', 'Atlas Wing', 'Bindery Hall',
-    'Ledger House', 'Quiet Range', 'Ordinal Block', 'Census Hall',
-    'Paper Court', 'Kiln Annex', 'South Vault', 'Lantern Wing',
+    'North Bay', 'River Line', 'Atlas Works', 'Ordinal Plant',
+    'Kiln Annex', 'South Dock', 'Range Two', 'Stack West',
+    'Annex Four', 'Court Line', 'Vault Works', 'Lantern Bay',
 ];
 
-/* id, criticality, affinity [air, power, water, fire] */
+/* id, criticality, affinity [air, power, coolant, safety]
+   Criticality is line-stop weight: a robot, a welder, a laser, or the
+   PLC cabinet outranks a dock or a crib when the crew is short. */
 const DECK = [
-    ['LOBBY',    3, [0.82, 0.52, 0.22, 0.68]],
-    ['GALLERY',  4, [0.88, 0.48, 0.16, 0.72]],
-    ['ARCHIVE',  5, [0.76, 0.42, 0.10, 0.84]],
-    ['VAULT',    5, [0.70, 0.58, 0.08, 0.90]],
-    ['LAB',      4, [0.80, 0.86, 0.72, 0.60]],
-    ['STUDIO',   3, [0.58, 0.62, 0.36, 0.42]],
-    ['READING',  2, [0.50, 0.36, 0.10, 0.46]],
-    ['STACKS',   3, [0.46, 0.32, 0.06, 0.56]],
-    ['OFFICE',   2, [0.62, 0.74, 0.18, 0.36]],
-    ['SHOP',     3, [0.52, 0.66, 0.40, 0.38]],
-    ['STORE',    2, [0.30, 0.34, 0.14, 0.28]],
-    ['PRINT',    3, [0.56, 0.60, 0.44, 0.34]],
-    ['DARKROOM', 3, [0.72, 0.50, 0.86, 0.30]],
-    ['BINDERY',  3, [0.42, 0.46, 0.26, 0.32]],
-    ['COURT',    2, [0.24, 0.20, 0.16, 0.22]],
-    ['CLOSET',   1, [0.16, 0.22, 0.06, 0.16]],
+    ['ROBOT',  5, [0.92, 0.96, 0.55, 0.94]],
+    ['WELD',   5, [0.78, 0.90, 0.84, 0.88]],
+    ['LASER',  5, [0.70, 0.92, 0.90, 0.86]],
+    ['PLC',    5, [0.28, 0.94, 0.22, 0.80]],
+    ['CNC',    4, [0.74, 0.88, 0.96, 0.62]],
+    ['PRESS',  4, [0.80, 0.84, 0.48, 0.90]],
+    ['GANTRY', 4, [0.46, 0.90, 0.30, 0.78]],
+    ['ASSY',   4, [0.84, 0.72, 0.18, 0.70]],
+    ['AGV',    4, [0.22, 0.86, 0.10, 0.82]],
+    ['TEST',   4, [0.66, 0.78, 0.24, 0.60]],
+    ['PAINT',  4, [0.94, 0.64, 0.72, 0.86]],
+    ['ASRS',   3, [0.20, 0.80, 0.08, 0.66]],
+    ['VISION', 3, [0.58, 0.76, 0.12, 0.40]],
+    ['METRO',  3, [0.48, 0.70, 0.16, 0.34]],
+    ['DOCK',   2, [0.36, 0.44, 0.10, 0.52]],
+    ['PACK',   2, [0.62, 0.50, 0.08, 0.36]],
+    ['KITT',   2, [0.40, 0.42, 0.06, 0.28]],
+    ['CRIB',   1, [0.18, 0.24, 0.04, 0.16]],
 ];
 
 const SERVICES = [
-    { id: 'AIR', name: 'Air',   k: 1.55, life: 1180, every: 130 },
-    { id: 'PWR', name: 'Power', k: 1.32, life: 1480, every: 190 },
-    { id: 'WTR', name: 'Water', k: 1.44, life: 1280, every: 150 },
-    { id: 'FIR', name: 'Fire',  k: 1.72, life: 1880, every: 280 },
+    { id: 'AIR', name: 'Air',     k: 1.55, life: 1180, every: 130 },
+    { id: 'PWR', name: 'Power',   k: 1.32, life: 1480, every: 190 },
+    { id: 'CLT', name: 'Coolant', k: 1.44, life: 1280, every: 150 },
+    { id: 'SAF', name: 'Safety',  k: 1.72, life: 1880, every: 280 },
 ];
 
 const canvas = document.getElementById('sheet');
@@ -587,7 +593,7 @@ function buildGeometry(seed, roomCount) {
     rooms.sort((a, b) => (a.y - b.y) || (a.x - b.x));
     rooms.forEach((rm, i) => { rm.n = i + 1; });
 
-    hall.program = 'HALL';
+    hall.program = 'AISLE';
     hall.crit = 1;
     hall.aff = [0.34, 0.40, 0.12, 0.48];
 
@@ -1003,7 +1009,7 @@ function drawLabel(rm) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    if (rm.program === 'HALL') {
+    if (rm.program === 'AISLE') {
         const verticalHall = rm.h > rm.w;
         ctx.font = '700 20px ' + MONO;
         ctx.letterSpacing = '1px';
@@ -1021,11 +1027,11 @@ function drawLabel(rm) {
         ctx.letterSpacing = '1px';
         ctx.fillText(pad(rm.n, 2), 0, params.showNames ? -12 : 0);
         if (params.showNames) {
-            plateText('HALL', 0, 14, '600 15px ' + SANS, 'left');
+            plateText('AISLE', 0, 14, '600 15px ' + SANS, 'left');
             ctx.fillStyle = INK;
             ctx.font = '600 15px ' + SANS;
             ctx.letterSpacing = '3.5px';
-            ctx.fillText('HALL', 0, 14);
+            ctx.fillText('AISLE', 0, 14);
         }
         ctx.restore();
         return;

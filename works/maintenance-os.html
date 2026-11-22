@@ -3,24 +3,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Maintenance OS — Duty Cycle</title>
+<title>Maintenance OS — Line Board</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,500;0,600;0,700;1,500&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <!--
-    MAINTENANCE OS — DUTY CYCLE
-    A seeded operating picture of a robotics and manufacturing plant
+    MAINTENANCE OS — LINE BOARD
+    A seeded operating picture of a robotics and manufacturing line
     under maintenance.
 
-    The floor is grown, not drawn. One integer seed cuts a main aisle
-    through a rectangular plate, then partitions each wing into cells by
-    recursive binary space division until the cell count is met. A
-    breadth-first door tree hangs every cell back onto the aisle, so the
-    plan reads as a plant rather than a treemap. The cell nearest the
-    centroid becomes the mechanical core. Four services — plant air,
-    servo power, coolant, and safety — run as parallel risers inside the
-    aisle and reach each served cell by an orthogonal path along the
-    door tree.
+    The line is sequenced, not drawn. One integer seed still grows the
+    plant — a main aisle, cells, a door tree, four services — and then
+    the cells are ordered into a process: dock, kitting, press, weld,
+    robot, assembly, test, pack. Parts travel that sequence. A station
+    with an open order stops the belt; work piles upstream and the
+    downstream stations starve. Crew on a station slows it. The board
+    under the belt is the dashboard: rate, takt, WIP, and the down
+    station, plus a trace and a column for every station cycling.
 
     Time is a duty cycle, and a repair is not a new machine. At the
     opening of the duty year every asset samples a Weibull residual from
@@ -45,12 +44,12 @@
 
     The sheet is top-aligned in the stage, a deliberate break from the
     centered armature, so the placard and the register stay on the
-    first screen with the plan. The frame still does not perform.
-    The canvas does. A display clock, not a seed, drives three motions:
-    dashed current along the services, a call traveling the door tree
-    for every open order, and a crew mark that walks out and back.
-    Run advances the duty day; Hold stops the calendar. Export is taken
-    at phase zero, so the edition is still seed and parameters alone.
+    first screen with the line. The frame still does not perform.
+    The canvas does. A display clock, not a seed, drives the belt,
+    the station cycles, and the dashboard trace. Run advances the duty
+    day; Hold stops the calendar and leaves the line moving. Export is
+    the line at release, before the clock advances, so the edition is
+    still seed and parameters alone.
 
     Nothing in the composition touches Math.random(), except the Reroll
     control, which only chooses the next seed. The sheet is rasterized
@@ -128,6 +127,33 @@
         margin-left: auto;
         font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: var(--ink);
     }
+
+    .board {
+        width: 100%;
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        border: 1px solid var(--line-strong);
+    }
+    .gauge { padding: 12px 14px 14px; min-width: 0; }
+    .gauge + .gauge { border-left: 1px solid var(--line); }
+    .gauge-k {
+        display: flex; align-items: baseline; gap: 8px;
+        font-size: 10px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase;
+    }
+    .gauge-k span { font-family: var(--mono); color: var(--accent); font-weight: 700; letter-spacing: 0; }
+    .gauge-n {
+        font-family: var(--mono); font-size: 32px; letter-spacing: 0.04em;
+        line-height: 1.05; margin-top: 8px;
+    }
+    .gauge-u {
+        font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;
+        text-transform: uppercase; color: var(--mute); margin-top: 4px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .gauge-track { margin-top: 10px; height: 2px; background: var(--line); }
+    .gauge-track i { display: block; height: 2px; width: 0; background: var(--ink); }
+    .gauge.is-down .gauge-n { color: var(--accent); }
+    .gauge.is-down .gauge-track i { background: var(--accent); }
 
     .caption {
         width: 100%;
@@ -267,6 +293,10 @@
             width: 100%; max-height: none;
             border-left: none; border-top: 1px solid var(--line-strong);
         }
+        .board { grid-template-columns: 1fr 1fr; }
+        .gauge:nth-child(3) { border-top: 1px solid var(--line); }
+        .gauge:nth-child(4) { border-top: 1px solid var(--line); }
+        .gauge:nth-child(odd) { border-left: none; }
     }
 </style>
 </head>
@@ -284,12 +314,38 @@
             <canvas id="sheet" width="1960" height="1260"></canvas>
         </div>
         <div class="caption">
+            <div class="board" id="board" aria-label="Line board">
+                <div class="gauge" id="gRateCard">
+                    <div class="gauge-k"><span>01</span> Rate</div>
+                    <div class="gauge-n" id="gRate">000</div>
+                    <div class="gauge-u">per minute</div>
+                    <div class="gauge-track"><i id="gRateBar"></i></div>
+                </div>
+                <div class="gauge" id="gTaktCard">
+                    <div class="gauge-k"><span>02</span> Takt</div>
+                    <div class="gauge-n" id="gTakt">0.0</div>
+                    <div class="gauge-u">seconds</div>
+                    <div class="gauge-track"><i id="gTaktBar"></i></div>
+                </div>
+                <div class="gauge" id="gWipCard">
+                    <div class="gauge-k"><span>03</span> Wip</div>
+                    <div class="gauge-n" id="gWip">00</div>
+                    <div class="gauge-u">on the line</div>
+                    <div class="gauge-track"><i id="gWipBar"></i></div>
+                </div>
+                <div class="gauge" id="gDownCard">
+                    <div class="gauge-k"><span>04</span> Down</div>
+                    <div class="gauge-n" id="gDown">00</div>
+                    <div class="gauge-u" id="gBlock">clear</div>
+                    <div class="gauge-track"><i id="gDownBar"></i></div>
+                </div>
+            </div>
             <div class="placard">
-                <div class="placard-title">Duty Cycle</div>
+                <div class="placard-title">Line Board</div>
                 <div class="placard-line" id="placardLine">
                     seed <span class="accent" id="placardSeed">4271</span>
-                    · weibull residual / bsp plan
-                    · kijima repair / door-tree risers
+                    · line flow / station cycle
+                    · kijima repair
                     · 1960&times;1260
                     · 2026
                 </div>
@@ -325,10 +381,10 @@
             </div>
             <div class="field">
                 <div class="field-label">
-                    <span class="name">Cells</span>
+                    <span class="name">Stations</span>
                     <span class="val" id="roomsVal">14</span>
                 </div>
-                <input type="range" id="roomsCtl" min="8" max="20" step="1" value="14" aria-label="Cells">
+                <input type="range" id="roomsCtl" min="8" max="20" step="1" value="14" aria-label="Stations">
             </div>
             <div class="field">
                 <div class="field-label">
@@ -394,7 +450,7 @@
                 <input type="checkbox" id="pmCtl" checked>
             </label>
             <label class="toggle">
-                <span class="name">Cell Names</span>
+                <span class="name">Station Names</span>
                 <input type="checkbox" id="namesCtl" checked>
             </label>
             <div class="census" id="census"></div>
@@ -1021,101 +1077,424 @@ function drawTravelers(geom, orders, t) {
     ctx.restore();
 }
 
-function drawSheet(geom, duty, t) {
+const LINE_ORDER = [
+    'DOCK', 'KITT', 'ASRS', 'PRESS', 'CNC', 'LASER', 'WELD', 'ROBOT', 'GANTRY',
+    'ASSY', 'PAINT', 'VISION', 'METRO', 'TEST', 'PACK',
+];
+const SUPPORT = ['CRIB', 'AGV', 'PLC', 'MECH'];
+
+let lineState = null;
+let plantSig = '';
+
+function lineStations(geom, duty) {
+    const cells = geom.rooms.filter(rm => rm.program !== 'AISLE');
+    cells.sort((a, b) => {
+        const rank = rm => {
+            const flow = LINE_ORDER.indexOf(rm.program);
+            if (flow >= 0) return flow;
+            const support = SUPPORT.indexOf(rm.program);
+            return 40 + (support < 0 ? 9 : support);
+        };
+        const da = rank(a), db = rank(b);
+        if (da !== db) return da - db;
+        return a.n - b.n;
+    });
+    return cells.map(rm => {
+        const mine = duty.orders.filter(o => o.room.n === rm.n);
+        return {
+            rm,
+            gate: LINE_ORDER.indexOf(rm.program) >= 0,
+            down: mine.some(o => o.state === 'OPEN'),
+            crew: mine.some(o => o.state === 'CREW'),
+            pm: mine.some(o => o.state === 'PM'),
+            cycle: 1.15 + (rm.crit || 2) * 0.38,
+        };
+    });
+}
+
+function freshLine(stations) {
+    const gates = Math.max(1, stations.filter(s => s.gate).length);
+    const count = Math.max(8, Math.round(8 + params.occupancy * gates));
+    const parts = [];
+    for (let i = 0; i < count; i++) parts.push({ p: ((i + 0.35) / count) * gates });
+    lineState = {
+        stations,
+        parts,
+        seed: params.seed,
+        occ: params.occupancy,
+        rooms: params.rooms,
+        exits: 0,
+        shift: 0,
+        trace: [],
+        traceAcc: 0,
+        exitWindow: 0,
+    };
+    plantSig = params.seed + ':' + params.rooms + ':' + params.occupancy;
+}
+
+function syncStations() {
+    if (!view) return;
+    const stations = lineStations(view.geom, view.duty);
+    const key = params.seed + ':' + params.rooms + ':' + params.occupancy;
+    if (!lineState || plantSig !== key || lineState.stations.length !== stations.length) freshLine(stations);
+    else lineState.stations = stations;
+}
+
+function stepLine(dt) {
+    if (!lineState || !lineState.stations.length || dt <= 0) return;
+    const stations = lineState.stations.filter(s => s.gate);
+    const n = stations.length;
+    const speed = 0.55 + params.occupancy * 0.7;
+    const gap = 0.34;
+    const parts = lineState.parts;
+    parts.sort((a, b) => b.p - a.p);
+    let ahead = n + 2;
+    let exits = 0;
+    for (const part of parts) {
+        const si = Math.max(0, Math.min(n - 1, Math.floor(Math.max(0, part.p))));
+        const st = stations[si];
+        let v = speed;
+        if (part.p >= 0 && st) {
+            if (st.down) v = 0;
+            else if (st.crew) v = speed * 0.32;
+        }
+        let np = part.p + dt * v;
+        if (st && st.down && part.p >= 0 && np > si + 0.82) np = si + 0.82;
+        if (np > ahead - gap) np = ahead - gap;
+        if (np >= n) {
+            exits++;
+            part.recycle = true;
+            np = n;
+        } else {
+            part.recycle = false;
+        }
+        part.p = np;
+        ahead = part.p;
+    }
+    let tail = 0;
+    for (const part of parts) if (!part.recycle) tail = Math.min(tail, part.p);
+    for (const part of parts) {
+        if (!part.recycle) continue;
+        tail -= gap;
+        part.p = tail;
+        part.recycle = false;
+    }
+    lineState.exits += exits;
+    lineState.shift += exits;
+    lineState.exitWindow += exits;
+    lineState.traceAcc += dt;
+    if (lineState.traceAcc >= 0.22) {
+        lineState.trace.push(lineState.exitWindow);
+        lineState.exitWindow = 0;
+        lineState.traceAcc = 0;
+        if (lineState.trace.length > 64) lineState.trace.shift();
+    }
+}
+
+function lineMetrics() {
+    const st = lineState ? lineState.stations : [];
+    const gates = st.filter(s => s.gate);
+    const downGates = gates.filter(s => s.down);
+    const down = st.filter(s => s.down);
+    const recent = lineState ? lineState.trace.slice(-12) : [];
+    const sum = recent.reduce((a, b) => a + b, 0);
+    const windowSec = Math.max(0.22, recent.length * 0.22);
+    const perMin = recent.length ? Math.round(sum / windowSec * 60) : 0;
+    const live = gates.filter(s => !s.down);
+    const bottleneck = downGates[0] || down[0];
+    const takt = bottleneck
+        ? bottleneck.cycle * 2.2
+        : (live.length ? live.reduce((a, s) => a + s.cycle, 0) / live.length : 0);
+    return {
+        perHour: perMin,
+        takt,
+        wip: lineState ? lineState.parts.length : 0,
+        down: down.length,
+        n: gates.length,
+        block: bottleneck ? bottleneck.rm.program : 'CLEAR',
+        up: st.length - down.length,
+    };
+}
+
+function syncBoard() {
+    const m = lineMetrics();
+    const rate = el('gRate');
+    if (!rate) return;
+    rate.textContent = pad(Math.min(999, m.perHour), 3);
+    el('gTakt').textContent = m.takt.toFixed(1);
+    el('gWip').textContent = pad(m.wip, 2);
+    el('gDown').textContent = pad(m.down, 2);
+    el('gBlock').textContent = m.block.toLowerCase();
+    el('gRateBar').style.width = Math.min(100, m.perHour / 1.1) + '%';
+    el('gTaktBar').style.width = Math.min(100, m.takt / 0.08) + '%';
+    el('gWipBar').style.width = Math.min(100, m.n ? (m.wip / (m.n * 1.3)) * 100 : 0) + '%';
+    el('gDownBar').style.width = (m.n ? (m.down / m.n) * 100 : 0) + '%';
+    el('gDownCard').classList.toggle('is-down', m.down > 0);
+    if (view) {
+        const open = view.duty.orders.filter(o => o.state === 'OPEN').length;
+        el('topMeta').textContent = view.geom.site
+            + '  ·  Day ' + pad(params.day, 3)
+            + '  ·  ' + pad(open, 2) + ' Open'
+            + '  ·  ' + pad(Math.min(999, m.perHour), 3) + '/min';
+    }
+}
+
+function stationX(i, n) {
+    const x0 = 96, x1 = 1864;
+    return x0 + (i + 0.5) * ((x1 - x0) / Math.max(1, n));
+}
+
+function drawLineBoard(geom, duty, t) {
     ctx.fillStyle = PAPER;
     ctx.fillRect(0, 0, W, H);
+    ctx.setLineDash([]);
     ctx.lineCap = 'butt';
     ctx.lineJoin = 'miter';
     ctx.letterSpacing = '0px';
-    ctx.setLineDash([]);
+    ctx.textBaseline = 'alphabetic';
 
-    const showSvc = params.service === 'ALL'
-        ? [0, 1, 2, 3]
-        : [SERVICES.findIndex(s => s.id === params.service)];
-    const layers = serviceLayers(geom, duty.assets);
+    if (!lineState) syncStations();
+    const stations = lineState.stations;
+    const gates = stations.filter(s => s.gate);
+    const n = Math.max(1, gates.length);
+    const beltY = 268;
+    const speedPx = 70 + params.occupancy * 150;
 
-    const hot = new Set();
-    for (const o of duty.orders) {
-        if (o.state === 'OPEN') hot.add(o.svc.id + ':' + o.room.n);
-    }
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(PLAN.x, PLAN.y, PLAN.w, PLAN.h);
-    ctx.clip();
-    ctx.strokeStyle = 'rgba(17,17,17,0.28)';
-    ctx.lineWidth = 2.5;
-    strokeSegs(layers.chase);
-    ctx.strokeStyle = params.service === 'ALL' ? 'rgba(17,17,17,0.22)' : 'rgba(17,17,17,0.28)';
-    ctx.lineWidth = params.service === 'ALL' ? 2 : 3;
-    showSvc.forEach(si => {
-        if (si < 0) return;
-        const parts = [];
-        if (layers.trunks[si]) parts.push(layers.trunks[si]);
-        parts.push(...layers.fans[si]);
-        strokeSegs(parts);
-    });
-    ctx.restore();
+    ctx.fillStyle = INK;
+    ctx.font = '600 18px ' + SANS;
+    ctx.letterSpacing = '6px';
+    ctx.textAlign = 'left';
+    ctx.fillText('PROCESS LINE', 96, 78);
+    ctx.letterSpacing = '0px';
+    ctx.fillStyle = MUTE;
+    ctx.font = '400 16px ' + MONO;
+    ctx.textAlign = 'right';
+    ctx.fillText(geom.site.toUpperCase(), 1864, 76);
 
     ctx.strokeStyle = INK;
     ctx.lineWidth = 2;
-    for (const rm of geom.rooms) {
-        ctx.strokeRect(rm.x + 0.5, rm.y + 0.5, rm.w, rm.h);
-    }
-
-    ctx.strokeStyle = PAPER;
-    ctx.lineWidth = 14;
-    ctx.beginPath();
-    for (const rm of geom.rooms) {
-        const d = rm.door;
-        if (!d) continue;
-        ctx.moveTo(d.x1, d.y1);
-        ctx.lineTo(d.x2, d.y2);
-    }
-    ctx.stroke();
-
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 1.75;
-    ctx.beginPath();
-    for (const rm of geom.rooms) {
-        const d = rm.door;
-        if (!d) continue;
-        ctx.moveTo(d.mx, d.my);
-        ctx.lineTo(d.mx + d.nx * 28, d.my + d.ny * 28);
-    }
-    ctx.stroke();
-
-    ctx.lineWidth = 3.5;
-    ctx.strokeRect(PLAN.x + 0.5, PLAN.y + 0.5, PLAN.w, PLAN.h);
+    ctx.strokeRect(96.5, beltY - 26.5, 1768, 52);
 
     ctx.save();
     ctx.beginPath();
-    ctx.rect(PLAN.x + 3, PLAN.y + 3, PLAN.w - 6, PLAN.h - 6);
+    ctx.rect(100, beltY - 22, 1760, 44);
     ctx.clip();
-    ctx.setLineDash([]);
-    strokeFlow(layers.chase, 120, 'rgba(17,17,17,0.88)', 2.75, t || 0);
-    showSvc.forEach(si => {
-        if (si < 0) return;
-        const cold = [];
-        const live = [];
-        const id = SERVICES[si].id;
-        layers.fans[si].forEach((seg, i) => {
-            const n = layers.fanRoom[si][i];
-            if (hot.has(id + ':' + n)) live.push(seg);
-            else cold.push(seg);
-        });
-        const trunk = layers.trunks[si] ? [layers.trunks[si]] : [];
-        const ink = params.service === 'ALL' ? 'rgba(17,17,17,0.92)' : INK;
-        strokeFlow(trunk.concat(cold), FLOW[si], ink, params.service === 'ALL' ? 2.5 : 3.25, t || 0);
-        strokeFlow(live, FLOW[si] * 1.35, ACCENT, 3.25, t || 0);
-    });
+    ctx.strokeStyle = 'rgba(17,17,17,0.9)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([14, 18]);
+    ctx.lineDashOffset = -((t || 0) * speedPx);
+    ctx.beginPath();
+    ctx.moveTo(80, beltY - 8);
+    ctx.lineTo(1900, beltY - 8);
+    ctx.moveTo(80, beltY + 8);
+    ctx.lineTo(1900, beltY + 8);
+    ctx.stroke();
     ctx.restore();
 
-    for (const rm of geom.rooms) drawLabel(rm);
+    gates.forEach((st, i) => {
+        const x = stationX(i, n);
+        const bw = Math.max(18, Math.min(78, (1768 / n) - 14));
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x - bw / 2 + 0.5, 168.5, bw, 10);
+        const phase = ((t || 0) / st.cycle + i * 0.17) % 1;
+        if (st.down) {
+            ctx.fillStyle = ACCENT;
+            ctx.fillRect(x - bw / 2 + 0.5, 168.5, bw, 10);
+        } else {
+            ctx.fillStyle = INK;
+            const fill = st.crew ? phase * 0.4 : phase;
+            ctx.fillRect(x - bw / 2 + 0.5, 168.5, Math.max(0, bw * fill), 10);
+        }
+        ctx.beginPath();
+        ctx.moveTo(x, 188);
+        ctx.lineTo(x, beltY - 26);
+        ctx.moveTo(x, beltY + 26);
+        ctx.lineTo(x, beltY + 48);
+        ctx.stroke();
 
-    drawTravelers(geom, duty.orders, t || 0);
-    drawMarks(duty.orders, t || 0);
+        if (params.showNames) {
+            ctx.fillStyle = st.down ? ACCENT : INK;
+            ctx.font = (n > 14 ? '600 12px ' : '600 15px ') + SANS;
+            ctx.textAlign = 'center';
+            ctx.letterSpacing = n > 12 ? '0.5px' : '2px';
+            ctx.fillText(st.rm.program, x, 148);
+            ctx.letterSpacing = '0px';
+        }
+        ctx.fillStyle = MUTE;
+        ctx.font = '700 14px ' + MONO;
+        ctx.textAlign = 'center';
+        ctx.fillText(pad(i + 1, 2), x, beltY + 72);
+        if (st.down) {
+            ctx.fillStyle = ACCENT;
+            ctx.fillRect(x - 8, beltY + 84, 16, 16);
+        } else if (st.crew) {
+            ctx.strokeStyle = INK;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x - 8.5, beltY + 83.5, 16, 16);
+        } else if (st.pm) {
+            ctx.strokeStyle = INK;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(x, beltY + 84);
+            ctx.lineTo(x, beltY + 100);
+            ctx.moveTo(x - 8, beltY + 92);
+            ctx.lineTo(x + 8, beltY + 92);
+            ctx.stroke();
+        }
+    });
+
+    const parts = lineState.parts;
+    let queued = 0;
+    const ordered = parts.slice().sort((a, b) => a.p - b.p);
+    for (const part of ordered) {
+        let x;
+        let held = false;
+        if (part.p < 0) {
+            x = 78 - queued * 8;
+            queued++;
+            if (queued > 10) continue;
+        } else {
+            x = 96 + (part.p / n) * 1768;
+            const si = Math.max(0, Math.min(n - 1, Math.floor(part.p)));
+            held = !!(gates[si] && gates[si].down && part.p > si + 0.45);
+        }
+        if (x < 20 || x > 1900) continue;
+        ctx.fillStyle = held ? ACCENT : INK;
+        ctx.fillRect(Math.round(x - 12), beltY - 12, 24, 24);
+    }
+
+    drawFigures(t);
+    drawTrace(t);
+    drawColumns(t);
     drawBand(geom, duty);
+}
+
+function drawFigures(t) {
+    const m = lineMetrics();
+    const cards = [
+        ['01  RATE', pad(Math.min(999, m.perHour), 3), '/ MIN', Math.min(1, m.perHour / 110), false],
+        ['02  TAKT', m.takt.toFixed(1), 'SEC', Math.min(1, m.takt / 8), false],
+        ['03  WIP', pad(m.wip, 2), 'ON LINE', Math.min(1, m.n ? m.wip / (m.n * 1.3) : 0), false],
+        ['04  DOWN', pad(m.down, 2), m.block, m.n ? m.down / m.n : 0, m.down > 0],
+    ];
+    const y = 470;
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(96, y);
+    ctx.lineTo(1864, y);
+    ctx.stroke();
+    cards.forEach((c, i) => {
+        const x = 96 + i * 442;
+        if (i) {
+            ctx.strokeStyle = 'rgba(17,17,17,0.18)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(x - 24, y + 28);
+            ctx.lineTo(x - 24, y + 168);
+            ctx.stroke();
+        }
+        ctx.fillStyle = MUTE;
+        ctx.font = '600 16px ' + SANS;
+        ctx.textAlign = 'left';
+        ctx.letterSpacing = '3px';
+        ctx.fillText(c[0], x, y + 48);
+        ctx.letterSpacing = '0px';
+        ctx.fillStyle = c[4] ? ACCENT : INK;
+        ctx.font = '700 64px ' + MONO;
+        ctx.fillText(c[1], x, y + 124);
+        ctx.fillStyle = MUTE;
+        ctx.font = '400 16px ' + MONO;
+        ctx.fillText(c[2], x, y + 156);
+        const bw = 280;
+        ctx.fillStyle = 'rgba(17,17,17,0.12)';
+        ctx.fillRect(x, y + 176, bw, 4);
+        ctx.fillStyle = c[4] ? ACCENT : INK;
+        const wobble = c[4] ? (0.85 + 0.15 * Math.sin((t || 0) * 4)) : 1;
+        ctx.fillRect(x, y + 176, Math.max(0, bw * c[3] * wobble), 4);
+    });
+}
+
+function drawTrace(t) {
+    const y = 720;
+    const x0 = 96;
+    const x1 = 1864;
+    const h = 130;
+    ctx.fillStyle = INK;
+    ctx.font = '600 16px ' + SANS;
+    ctx.textAlign = 'left';
+    ctx.letterSpacing = '3px';
+    ctx.fillText('THROUGHPUT', x0, y);
+    ctx.letterSpacing = '0px';
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(x0 + 0.5, y + 18.5, x1 - x0, h);
+    const trace = lineState ? lineState.trace : [];
+    const max = Math.max(2, ...trace, 1);
+    ctx.beginPath();
+    ctx.moveTo(x0, y + 18 + h);
+    trace.forEach((v, i) => {
+        const x = x0 + ((i + 1) / 64) * (x1 - x0);
+        const py = y + 18 + h - (v / max) * (h - 16);
+        if (i === 0) ctx.lineTo(x, py);
+        else ctx.lineTo(x, py);
+    });
+    if (trace.length) {
+        const last = trace[trace.length - 1];
+        const lx = x0 + (trace.length / 64) * (x1 - x0);
+        const ly = y + 18 + h - (last / max) * (h - 16);
+        ctx.lineTo(lx, y + 18 + h);
+    }
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(17,17,17,0.06)';
+    ctx.fill();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    trace.forEach((v, i) => {
+        const x = x0 + ((i + 1) / 64) * (x1 - x0);
+        const py = y + 18 + h - (v / max) * (h - 16);
+        if (i === 0) ctx.moveTo(x, py);
+        else ctx.lineTo(x, py);
+    });
+    ctx.stroke();
+    const scan = x0 + (((t || 0) * 90) % (x1 - x0));
+    ctx.strokeStyle = ACCENT;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(scan, y + 18);
+    ctx.lineTo(scan, y + 18 + h);
+    ctx.stroke();
+}
+
+function drawColumns(t) {
+    const stations = lineState ? lineState.stations : [];
+    const n = stations.length || 1;
+    const y = 900;
+    const h = 118;
+    ctx.fillStyle = INK;
+    ctx.font = '600 16px ' + SANS;
+    ctx.textAlign = 'left';
+    ctx.letterSpacing = '3px';
+    ctx.fillText('STATIONS', 96, y);
+    ctx.letterSpacing = '0px';
+    stations.forEach((st, i) => {
+        const x = stationX(i, n);
+        const bw = Math.max(10, Math.min(36, (1768 / n) - 10));
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x - bw / 2 + 0.5, y + 16.5, bw, h);
+        const phase = ((t || 0) / st.cycle + i * 0.13) % 1;
+        const fill = st.down ? 1 : (st.crew ? phase * 0.45 : phase);
+        ctx.fillStyle = st.down ? ACCENT : INK;
+        const fh = Math.max(0, (h - 2) * fill);
+        ctx.fillRect(x - bw / 2 + 1, y + 16 + h - fh, bw - 2, fh);
+    });
+}
+
+function drawSheet(geom, duty, t) {
+    drawLineBoard(geom, duty, t);
 }
 
 /* A paper plate behind the name, so a riser never strikes the type. */
@@ -1297,15 +1676,16 @@ function drawBand(geom, duty) {
     ctx.textAlign = 'left';
     ctx.font = '700 28px ' + SANS;
     ctx.letterSpacing = '8px';
-    ctx.fillText('DUTY CYCLE', 168, y + 64);
+    ctx.fillText('LINE BOARD', 168, y + 64);
 
     ctx.fillStyle = MUTE;
     ctx.font = '400 18px ' + MONO;
     ctx.letterSpacing = '0.5px';
+    const wip = lineState ? lineState.parts.length : 0;
     const line = 'seed ' + params.seed
         + '   ·   day ' + pad(params.day, 3)
-        + '   ·   open ' + pad(open, 2)
-        + '   ·   crew ' + pad(crew, 2);
+        + '   ·   wip ' + pad(wip, 2)
+        + '   ·   open ' + pad(open, 2);
     ctx.fillText(line, 168, y + 108);
 
     const x0 = 168;
@@ -1417,6 +1797,7 @@ function paint() {
     el('status').textContent = pad(open, 2) + ' open  ·  ' + pad(crew, 2) + ' with crew  ·  ' + pad(pm, 2) + ' preventive' + tail;
     renderCensus(duty.census);
     renderRegister(duty.orders);
+    syncStations();
     syncRun();
 
     document.querySelectorAll('#svcGrid .btn').forEach(b => {
@@ -1439,9 +1820,11 @@ function loop(now) {
         }
     }
     if (!view || signature() !== sig) paint();
+    stepLine(Math.min(0.05, dt / 1000));
     motion.t = now / 1000;
     motion.year = ((params.day - 1) + (running ? carry / STEP : 0)) / 365;
     drawSheet(view.geom, view.duty, motion.t);
+    syncBoard();
     raf = requestAnimationFrame(loop);
 }
 
@@ -1515,16 +1898,21 @@ document.addEventListener('keydown', e => {
 
 el('exportBtn').addEventListener('click', () => {
     cancelAnimationFrame(raf);
+    const saved = lineState;
+    const savedSig = plantSig;
     if (view) {
+        freshLine(lineStations(view.geom, view.duty));
         motion.year = (params.day - 1) / 365;
         drawSheet(view.geom, view.duty, 0);
     }
     canvas.toBlob(blob => {
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = exportName('Duty Cycle', params.seed);
+        a.download = exportName('Line Board', params.seed);
         a.click();
         URL.revokeObjectURL(a.href);
+        lineState = saved;
+        plantSig = savedSig;
         lastTick = 0;
         raf = requestAnimationFrame(loop);
     }, 'image/png');

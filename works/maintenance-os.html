@@ -15,11 +15,13 @@
     The line is sequenced, not drawn. One integer seed still grows the
     plant — a main aisle, cells, a door tree, four services — and then
     the cells are ordered into a process: dock, kitting, press, weld,
-    robot, assembly, test, pack. Parts travel that sequence. A station
-    with an open order stops the belt; work piles upstream and the
-    downstream stations starve. Crew on a station slows it. The board
-    under the belt is the dashboard: rate, takt, WIP, and the down
-    station, plus a trace and a column for every station cycling.
+    robot, assembly, test, pack. Parts travel that sequence. An order
+    inside the horizon is a forecast and stays on the register. The
+    station stops on the day a safety or power failure is due, and
+    while a crew is in the cell repairing it. Air or coolant, due and
+    unattended, lengthens the cycle. The board under the belt is the
+    instrument: rate, takt, WIP against Little's law, and OEE as
+    availability times performance times quality.
 
     Time is a duty cycle, and a repair is not a new machine. At the
     opening of the duty year every asset samples a Weibull residual from
@@ -45,11 +47,16 @@
     The sheet is top-aligned in the stage, a deliberate break from the
     centered armature, so the placard and the register stay on the
     first screen with the line. The frame still does not perform.
-    The canvas does. A display clock, not a seed, drives the belt,
-    the station cycles, and the dashboard trace. Run advances the duty
-    day; Hold stops the calendar and leaves the line moving. Export is
-    the line at release, before the clock advances, so the edition is
-    still seed and parameters alone.
+    The canvas does. A display clock advances a discrete line: each
+    station holds one part for its process time, with a buffer of two
+    behind it. Demand sets the takt. The slowest live station is the
+    constraint; a due safety or power failure replaces it. Availability
+    is the fraction of the recent window the line was not stopped.
+    Performance is how much of that window the constraint was cycling,
+    times its nameplate divided by its worn cycle. Quality is good pieces over
+    good plus scrap. WIP is counted and checked against departures
+    times sojourn. Export is the line after a fixed warm-up, so the
+    edition is still seed and parameters alone.
 
     Nothing in the composition touches Math.random(), except the Reroll
     control, which only chooses the next seed. The sheet is rasterized
@@ -58,9 +65,9 @@
     the seed.
 
     Algorithms: mulberry32 · Fisher–Yates shuffle · recursive binary
-    space partition · BFS door tree · orthogonal door-tree routing ·
-    Weibull conditional residual life · Kijima Type I imperfect repair ·
-    priority dispatch.
+    space partition · BFS door tree · Weibull conditional residual ·
+    Kijima Type I · priority dispatch · finite-buffer serial line ·
+    takt · Little's law · OEE.
 
     Axel Ruiz Design — studio canon (atelier), 2026.
 -->
@@ -324,17 +331,17 @@
                 <div class="gauge" id="gTaktCard">
                     <div class="gauge-k"><span>02</span> Takt</div>
                     <div class="gauge-n" id="gTakt">0.0</div>
-                    <div class="gauge-u">seconds</div>
+                    <div class="gauge-u" id="gTaktUnit">seconds</div>
                     <div class="gauge-track"><i id="gTaktBar"></i></div>
                 </div>
                 <div class="gauge" id="gWipCard">
                     <div class="gauge-k"><span>03</span> Wip</div>
                     <div class="gauge-n" id="gWip">00</div>
-                    <div class="gauge-u">on the line</div>
+                    <div class="gauge-u" id="gWipUnit">on the line</div>
                     <div class="gauge-track"><i id="gWipBar"></i></div>
                 </div>
                 <div class="gauge" id="gDownCard">
-                    <div class="gauge-k"><span>04</span> Down</div>
+                    <div class="gauge-k"><span>04</span> Oee</div>
                     <div class="gauge-n" id="gDown">00</div>
                     <div class="gauge-u" id="gBlock">clear</div>
                     <div class="gauge-track"><i id="gDownBar"></i></div>
@@ -344,7 +351,7 @@
                 <div class="placard-title">Line Board</div>
                 <div class="placard-line" id="placardLine">
                     seed <span class="accent" id="placardSeed">4271</span>
-                    · line flow / station cycle
+                    · <span id="placardLaw">A 00 · P 00 · Q 00</span>
                     · kijima repair
                     · 1960&times;1260
                     · 2026
@@ -420,10 +427,10 @@
             </div>
             <div class="field">
                 <div class="field-label">
-                    <span class="name">Utilization</span>
+                    <span class="name">Demand</span>
                     <span class="val" id="occVal">62%</span>
                 </div>
-                <input type="range" id="occCtl" min="0" max="100" step="1" value="62" aria-label="Utilization">
+                <input type="range" id="occCtl" min="0" max="100" step="1" value="62" aria-label="Demand">
             </div>
             <div class="field">
                 <div class="field-label">
@@ -1082,6 +1089,18 @@ const LINE_ORDER = [
     'ASSY', 'PAINT', 'VISION', 'METRO', 'TEST', 'PACK',
 ];
 const SUPPORT = ['CRIB', 'AGV', 'PLC', 'MECH'];
+/* Nominal process time, seconds. The line can run no faster than the
+   longest of these once age and a crew in the cell have stretched it. */
+const PROCESS = {
+    DOCK: 3.4, KITT: 4.8, ASRS: 6.2, PRESS: 9.6, CNC: 14.5,
+    LASER: 11.2, WELD: 12.8, ROBOT: 8.4, GANTRY: 7.2, ASSY: 10.6,
+    PAINT: 13.4, VISION: 3.6, METRO: 5.4, TEST: 8.8, PACK: 4.2,
+};
+const BUFFER = 2;
+/* Wall time to process time. A worn bottleneck is still a visible cycle. */
+const TIME_SCALE = 24;
+/* Rate, availability, and Little's law are read over this many process seconds. */
+const WINDOW = 120;
 
 let lineState = null;
 let plantSig = '';
@@ -1099,143 +1118,297 @@ function lineStations(geom, duty) {
         if (da !== db) return da - db;
         return a.n - b.n;
     });
+    /* A forecast is not a breakdown. The order sits on the register
+       until the day it is due. That day, a safety or power failure
+       stops the cell, and so does a crew repairing it. Air or coolant,
+       due and unattended, only lengthens the cycle. */
+    const dueToday = o => o.kind === 'COR' && o.days >= 0 && o.days < 1;
     return cells.map(rm => {
-        const mine = duty.orders.filter(o => o.room.n === rm.n);
+        const gate = LINE_ORDER.indexOf(rm.program) >= 0;
+        const due = duty.orders.filter(o => o.room.n === rm.n && dueToday(o));
+        const crew = due.some(o => o.state === 'CREW');
+        const open = due.filter(o => o.state === 'OPEN');
+        const hard = crew || open.some(o => o.svc.id === 'SAF' || o.svc.id === 'PWR');
         return {
             rm,
-            gate: LINE_ORDER.indexOf(rm.program) >= 0,
-            down: mine.some(o => o.state === 'OPEN'),
-            crew: mine.some(o => o.state === 'CREW'),
-            pm: mine.some(o => o.state === 'PM'),
-            cycle: 1.15 + (rm.crit || 2) * 0.38,
+            gate,
+            down: gate && hard,
+            degraded: gate && !hard && open.length > 0,
+            crew: gate && crew,
+            pm: duty.orders.some(o => o.room.n === rm.n && o.state === 'PM'),
         };
     });
 }
 
+function taktSeconds() {
+    return 7.2 / (0.45 + 0.85 * params.occupancy);
+}
+
+function ageFactor() {
+    return 0.84 + 0.48 * Math.pow(Math.max(0.2, params.age) / 32, 1.05);
+}
+
+/* Nameplate is the station as worn by age, before a crew or a fault. */
+function nameplate(st) {
+    return (PROCESS[st.rm.program] || 6) * ageFactor();
+}
+
+function processTime(st) {
+    const wear = (st.crew ? 1.65 : 1) * (st.degraded ? 1.45 : 1);
+    return nameplate(st) * wear;
+}
+
+function scrapAt(part, st) {
+    const u = mulberry32(mix(mix(params.seed, part.id + 1), st.rm.n * 13 + 7))();
+    const p = Math.min(0.18, 0.008 + 0.028 * (params.age / 50) + (st.pm ? 0.015 : 0));
+    return u < p;
+}
+
 function freshLine(stations) {
-    const gates = Math.max(1, stations.filter(s => s.gate).length);
-    const count = Math.max(8, Math.round(8 + params.occupancy * gates));
-    const parts = [];
-    for (let i = 0; i < count; i++) parts.push({ p: ((i + 0.35) / count) * gates });
     lineState = {
         stations,
-        parts,
+        machines: new Map(),
         seed: params.seed,
-        occ: params.occupancy,
         rooms: params.rooms,
-        exits: 0,
-        shift: 0,
+        sim: 0,
+        seq: 0,
+        nextRelease: 0,
+        good: 0,
+        scrap: 0,
+        missed: 0,
         trace: [],
         traceAcc: 0,
         exitWindow: 0,
+        exitsAt: [],
+        missedAt: [],
+        sojourns: [],
+        upWindow: [],
+        bnWindow: [],
+        marks: [],
     };
-    plantSig = params.seed + ':' + params.rooms + ':' + params.occupancy;
+    plantSig = params.seed + ':' + params.rooms;
+    /* A fixed warm-up, not the display clock. Long enough for one
+       flow time and a full measurement window, so the edition already
+       sits at the balance the parameters imply. */
+    let guard = 0;
+    while (lineState.sim < 480 && guard++ < 4000) stepLine(0.5, true);
 }
 
 function syncStations() {
     if (!view) return;
     const stations = lineStations(view.geom, view.duty);
-    const key = params.seed + ':' + params.rooms + ':' + params.occupancy;
+    const key = params.seed + ':' + params.rooms;
     if (!lineState || plantSig !== key || lineState.stations.length !== stations.length) freshLine(stations);
     else lineState.stations = stations;
 }
 
-function stepLine(dt) {
+function stepLine(dt, warming) {
     if (!lineState || !lineState.stations.length || dt <= 0) return;
-    const stations = lineState.stations.filter(s => s.gate);
-    const n = stations.length;
-    const speed = 0.55 + params.occupancy * 0.7;
-    const gap = 0.34;
-    const parts = lineState.parts;
-    parts.sort((a, b) => b.p - a.p);
-    let ahead = n + 2;
-    let exits = 0;
-    for (const part of parts) {
-        const si = Math.max(0, Math.min(n - 1, Math.floor(Math.max(0, part.p))));
-        const st = stations[si];
-        let v = speed;
-        if (part.p >= 0 && st) {
-            if (st.down) v = 0;
-            else if (st.crew) v = speed * 0.32;
+    const simDt = warming ? dt : dt * TIME_SCALE;
+    const gates = lineState.stations.filter(s => s.gate);
+    if (!gates.length) return;
+    const L = lineState;
+    L.sim += simDt;
+    const machines = gates.map(st => {
+        let m = L.machines.get(st.rm.n);
+        if (!m) {
+            m = { queue: [], busy: null, remain: 0, tau: 6, mode: 'starve' };
+            L.machines.set(st.rm.n, m);
         }
-        let np = part.p + dt * v;
-        if (st && st.down && part.p >= 0 && np > si + 0.82) np = si + 0.82;
-        if (np > ahead - gap) np = ahead - gap;
-        if (np >= n) {
-            exits++;
-            part.recycle = true;
-            np = n;
+        m.tau = processTime(st);
+        m.down = !!st.down;
+        m.st = st;
+        return m;
+    });
+
+    for (let i = machines.length - 1; i >= 0; i--) {
+        const m = machines[i];
+        if (m.down) {
+            m.mode = 'down';
+            continue;
+        }
+        if (m.busy && m.remain > 0) {
+            m.remain -= simDt;
+            m.mode = 'run';
+        }
+        if (m.busy && m.remain <= 0) {
+            const next = machines[i + 1];
+            const part = m.busy;
+            if (scrapAt(part, m.st)) {
+                L.scrap++;
+                L.sojourns.push({ t: L.sim, ct: L.sim - part.born });
+                L.marks.push({ i, until: L.sim + 0.8 });
+                m.busy = null;
+            } else if (!next) {
+                L.good++;
+                L.exitWindow++;
+                L.exitsAt.push(L.sim);
+                L.sojourns.push({ t: L.sim, ct: L.sim - part.born });
+                m.busy = null;
+            } else if (next.queue.length < BUFFER) {
+                next.queue.push(part);
+                m.busy = null;
+            } else {
+                m.remain = 0;
+                m.mode = 'block';
+            }
+        }
+        if (!m.busy && m.queue.length) {
+            m.busy = m.queue.shift();
+            m.remain = m.tau;
+            m.mode = 'run';
+        } else if (!m.busy) {
+            m.mode = 'starve';
+        }
+    }
+
+    const takt = taktSeconds();
+    L.takt = takt;
+    const head = machines[0];
+    let guard = 0;
+    while (L.sim >= L.nextRelease && guard++ < 8) {
+        L.nextRelease += takt;
+        if (head && !head.down && head.queue.length < BUFFER) {
+            head.queue.push({ id: ++L.seq, born: L.sim });
         } else {
-            part.recycle = false;
+            L.missed++;
+            L.missedAt.push(L.sim);
         }
-        part.p = np;
-        ahead = part.p;
     }
-    let tail = 0;
-    for (const part of parts) if (!part.recycle) tail = Math.min(tail, part.p);
-    for (const part of parts) {
-        if (!part.recycle) continue;
-        tail -= gap;
-        part.p = tail;
-        part.recycle = false;
-    }
-    lineState.exits += exits;
-    lineState.shift += exits;
-    lineState.exitWindow += exits;
-    lineState.traceAcc += dt;
-    if (lineState.traceAcc >= 0.22) {
-        lineState.trace.push(lineState.exitWindow);
-        lineState.exitWindow = 0;
-        lineState.traceAcc = 0;
-        if (lineState.trace.length > 64) lineState.trace.shift();
+    L.marks = L.marks.filter(mark => mark.until > L.sim);
+    trimSince(L.exitsAt, L.sim);
+    trimSince(L.missedAt, L.sim);
+    trimSince(L.sojourns, L.sim, 't');
+
+    const blocked = machines.some(m => m.down);
+    L.upWindow.push({ dt: simDt, up: blocked ? 0 : simDt });
+    trimSpan(L.upWindow);
+    const bn = machines.filter(m => !m.down).sort((a, b) => b.tau - a.tau)[0];
+    const bnBusy = bn && (bn.mode === 'run' || bn.mode === 'block');
+    const speed = bn && bn.tau ? nameplate(bn.st) / bn.tau : 1;
+    L.bnWindow.push({ dt: simDt, busy: bnBusy ? simDt : 0, speed });
+    trimSpan(L.bnWindow);
+
+    L.traceAcc += simDt;
+    if (L.traceAcc >= 1) {
+        L.trace.push(L.exitWindow);
+        L.exitWindow = 0;
+        L.traceAcc = 0;
+        if (L.trace.length > 64) L.trace.shift();
     }
 }
 
+function trimSpan(samples) {
+    let span = 0;
+    for (let i = samples.length - 1; i >= 0; i--) {
+        span += samples[i].dt;
+        if (span > WINDOW) {
+            samples.splice(0, i);
+            return;
+        }
+    }
+}
+
+function trimSince(arr, sim, key) {
+    const cut = sim - WINDOW;
+    let i = 0;
+    while (i < arr.length && (key ? arr[i][key] : arr[i]) < cut) i++;
+    if (i) arr.splice(0, i);
+}
+
 function lineMetrics() {
-    const st = lineState ? lineState.stations : [];
-    const gates = st.filter(s => s.gate);
-    const downGates = gates.filter(s => s.down);
-    const down = st.filter(s => s.down);
-    const recent = lineState ? lineState.trace.slice(-12) : [];
-    const sum = recent.reduce((a, b) => a + b, 0);
-    const windowSec = Math.max(0.22, recent.length * 0.22);
-    const perMin = recent.length ? Math.round(sum / windowSec * 60) : 0;
-    const live = gates.filter(s => !s.down);
-    const bottleneck = downGates[0] || down[0];
-    const takt = bottleneck
-        ? bottleneck.cycle * 2.2
-        : (live.length ? live.reduce((a, s) => a + s.cycle, 0) / live.length : 0);
+    const L = lineState;
+    const gates = L ? L.stations.filter(s => s.gate) : [];
+    const machines = gates.map(st => L.machines.get(st.rm.n)).filter(Boolean);
+    let wip = 0;
+    machines.forEach(m => { wip += m.queue.length + (m.busy ? 1 : 0); });
+    const recentExits = L ? L.exitsAt.filter(t => L.sim - t <= WINDOW) : [];
+    const perMin = (recentExits.length / WINDOW) * 60;
+    const recentStay = L ? L.sojourns.filter(s => L.sim - s.t <= WINDOW) : [];
+    const th = recentStay.length / WINDOW;
+    const ct = recentStay.length ? recentStay.reduce((a, s) => a + s.ct, 0) / recentStay.length : 0;
+    const little = th * ct;
+    const takt = L && L.takt ? L.takt : taktSeconds();
+    const down = machines.find(m => m.down);
+    const slow = machines.filter(m => !m.down).sort((a, b) => b.tau - a.tau)[0];
+    const constraint = down || slow;
+    const tauBn = constraint ? constraint.tau : 0;
+    const upSum = L ? L.upWindow.reduce((a, s) => a + s.up, 0) : 0;
+    const upSpan = L ? L.upWindow.reduce((a, s) => a + s.dt, 0) : 0;
+    const A = upSpan > 0.2 ? upSum / upSpan : 1;
+    let busy = 0;
+    let span = 0;
+    let speedAcc = 0;
+    let speedDt = 0;
+    if (L) {
+        L.bnWindow.forEach(s => {
+            span += s.dt;
+            busy += s.busy;
+            if (s.busy) {
+                speedAcc += s.speed * s.busy;
+                speedDt += s.busy;
+            }
+        });
+    }
+    const speed = speedDt > 0 ? speedAcc / speedDt : 1;
+    const P = span > 0.2 ? Math.max(0, Math.min(1, (busy / span) * speed)) : 1;
+    const finished = L ? L.good + L.scrap : 0;
+    const Q = finished ? L.good / finished : 1;
+    const oee = Math.max(0, Math.min(1, A * P * Q));
+    const missed = L ? L.missedAt.filter(t => L.sim - t <= WINDOW).length : 0;
     return {
-        perHour: perMin,
+        perMin,
         takt,
-        wip: lineState ? lineState.parts.length : 0,
-        down: down.length,
+        tauBn,
+        wip,
+        little,
+        oee,
+        A, P, Q,
         n: gates.length,
-        block: bottleneck ? bottleneck.rm.program : 'CLEAR',
-        up: st.length - down.length,
+        block: constraint && constraint.st ? constraint.st.rm.program : 'CLEAR',
+        down: !!down,
+        missed,
+        overTakt: tauBn > takt + 0.05,
     };
+}
+
+function fmtRate(x) {
+    if (!isFinite(x) || x < 0) return '0.0';
+    if (x >= 100) return String(Math.round(x));
+    return x.toFixed(1);
 }
 
 function syncBoard() {
     const m = lineMetrics();
     const rate = el('gRate');
     if (!rate) return;
-    rate.textContent = pad(Math.min(999, m.perHour), 3);
+    const demand = 60 / Math.max(0.1, m.takt);
+    rate.textContent = fmtRate(m.perMin);
     el('gTakt').textContent = m.takt.toFixed(1);
+    el('gTaktUnit').textContent = m.missed ? ('miss ' + m.missed) : 'seconds';
     el('gWip').textContent = pad(m.wip, 2);
-    el('gDown').textContent = pad(m.down, 2);
+    el('gWipUnit').textContent = m.little > 0.05 ? ('L ' + m.little.toFixed(1)) : 'on the line';
+    el('gDown').textContent = pad(Math.round(m.oee * 100), 2);
     el('gBlock').textContent = m.block.toLowerCase();
-    el('gRateBar').style.width = Math.min(100, m.perHour / 1.1) + '%';
-    el('gTaktBar').style.width = Math.min(100, m.takt / 0.08) + '%';
-    el('gWipBar').style.width = Math.min(100, m.n ? (m.wip / (m.n * 1.3)) * 100 : 0) + '%';
-    el('gDownBar').style.width = (m.n ? (m.down / m.n) * 100 : 0) + '%';
-    el('gDownCard').classList.toggle('is-down', m.down > 0);
+    const law = el('placardLaw');
+    if (law) {
+        law.textContent = 'A ' + pad(Math.round(m.A * 100), 2)
+            + ' · P ' + pad(Math.round(m.P * 100), 2)
+            + ' · Q ' + pad(Math.round(m.Q * 100), 2);
+    }
+    el('gRateBar').style.width = Math.min(100, demand ? (m.perMin / demand) * 100 : 0) + '%';
+    el('gTaktBar').style.width = Math.min(100, m.takt ? (m.tauBn / m.takt) * 100 : 0) + '%';
+    el('gWipBar').style.width = Math.min(100, m.n ? (m.wip / (m.n * (BUFFER + 1))) * 100 : 0) + '%';
+    el('gDownBar').style.width = Math.min(100, m.oee * 100) + '%';
+    el('gTaktCard').classList.toggle('is-down', m.overTakt || m.down);
+    el('gDownCard').classList.toggle('is-down', m.down || m.oee < 0.5);
     if (view) {
         const open = view.duty.orders.filter(o => o.state === 'OPEN').length;
         el('topMeta').textContent = view.geom.site
             + '  ·  Day ' + pad(params.day, 3)
             + '  ·  ' + pad(open, 2) + ' Open'
-            + '  ·  ' + pad(Math.min(999, m.perHour), 3) + '/min';
+            + '  ·  ' + fmtRate(m.perMin) + '/min'
+            + '  ·  OEE ' + pad(Math.round(m.oee * 100), 2);
     }
 }
 
@@ -1258,7 +1431,7 @@ function drawLineBoard(geom, duty, t) {
     const gates = stations.filter(s => s.gate);
     const n = Math.max(1, gates.length);
     const beltY = 268;
-    const speedPx = 70 + params.occupancy * 150;
+    const flow = lineState.good || 0;
 
     ctx.fillStyle = INK;
     ctx.font = '600 18px ' + SANS;
@@ -1282,7 +1455,7 @@ function drawLineBoard(geom, duty, t) {
     ctx.strokeStyle = 'rgba(17,17,17,0.9)';
     ctx.lineWidth = 2;
     ctx.setLineDash([14, 18]);
-    ctx.lineDashOffset = -((t || 0) * speedPx);
+    ctx.lineDashOffset = -(flow * 22);
     ctx.beginPath();
     ctx.moveTo(80, beltY - 8);
     ctx.lineTo(1900, beltY - 8);
@@ -1296,16 +1469,15 @@ function drawLineBoard(geom, duty, t) {
         const bw = Math.max(18, Math.min(78, (1768 / n) - 14));
         ctx.strokeStyle = INK;
         ctx.lineWidth = 1.5;
+        const m = lineState.machines.get(st.rm.n);
         ctx.strokeRect(x - bw / 2 + 0.5, 168.5, bw, 10);
-        const phase = ((t || 0) / st.cycle + i * 0.17) % 1;
-        if (st.down) {
-            ctx.fillStyle = ACCENT;
-            ctx.fillRect(x - bw / 2 + 0.5, 168.5, bw, 10);
-        } else {
-            ctx.fillStyle = INK;
-            const fill = st.crew ? phase * 0.4 : phase;
-            ctx.fillRect(x - bw / 2 + 0.5, 168.5, Math.max(0, bw * fill), 10);
-        }
+        const mode = m ? m.mode : 'starve';
+        let fill = 0;
+        if (mode === 'down') fill = 1;
+        else if (mode === 'block') fill = 1;
+        else if (mode === 'run' && m.tau) fill = Math.max(0, Math.min(1, 1 - m.remain / m.tau));
+        ctx.fillStyle = mode === 'down' ? ACCENT : INK;
+        if (fill > 0) ctx.fillRect(x - bw / 2 + 0.5, 168.5, Math.max(0, bw * fill), 10);
         ctx.beginPath();
         ctx.moveTo(x, 188);
         ctx.lineTo(x, beltY - 26);
@@ -1344,25 +1516,26 @@ function drawLineBoard(geom, duty, t) {
         }
     });
 
-    const parts = lineState.parts;
-    let queued = 0;
-    const ordered = parts.slice().sort((a, b) => a.p - b.p);
-    for (const part of ordered) {
-        let x;
-        let held = false;
-        if (part.p < 0) {
-            x = 78 - queued * 8;
-            queued++;
-            if (queued > 10) continue;
-        } else {
-            x = 96 + (part.p / n) * 1768;
-            const si = Math.max(0, Math.min(n - 1, Math.floor(part.p)));
-            held = !!(gates[si] && gates[si].down && part.p > si + 0.45);
+    gates.forEach((st, i) => {
+        const m = lineState.machines.get(st.rm.n);
+        if (!m) return;
+        const x = stationX(i, n);
+        if (m.busy) {
+            ctx.fillStyle = m.mode === 'down' ? ACCENT : INK;
+            ctx.fillRect(Math.round(x - 12), beltY - 12, 24, 24);
         }
-        if (x < 20 || x > 1900) continue;
-        ctx.fillStyle = held ? ACCENT : INK;
-        ctx.fillRect(Math.round(x - 12), beltY - 12, 24, 24);
-    }
+        m.queue.forEach((part, k) => {
+            const qx = x - 36 - k * 20;
+            if (qx < 40) return;
+            ctx.fillStyle = INK;
+            ctx.fillRect(Math.round(qx - 10), beltY - 10, 20, 20);
+        });
+        if (lineState.marks.some(mark => mark.i === i)) {
+            ctx.strokeStyle = ACCENT;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x - 8.5, beltY - 46.5, 16, 16);
+        }
+    });
 
     drawFigures(t);
     drawTrace(t);
@@ -1372,11 +1545,12 @@ function drawLineBoard(geom, duty, t) {
 
 function drawFigures(t) {
     const m = lineMetrics();
+    const demand = 60 / Math.max(0.1, m.takt);
     const cards = [
-        ['01  RATE', pad(Math.min(999, m.perHour), 3), '/ MIN', Math.min(1, m.perHour / 110), false],
-        ['02  TAKT', m.takt.toFixed(1), 'SEC', Math.min(1, m.takt / 8), false],
-        ['03  WIP', pad(m.wip, 2), 'ON LINE', Math.min(1, m.n ? m.wip / (m.n * 1.3) : 0), false],
-        ['04  DOWN', pad(m.down, 2), m.block, m.n ? m.down / m.n : 0, m.down > 0],
+        ['01  RATE', fmtRate(m.perMin), '/ MIN', Math.min(1, demand ? m.perMin / demand : 0), m.down],
+        ['02  TAKT', m.takt.toFixed(1), m.missed ? ('MISS ' + m.missed) : 'SEC', Math.min(1, m.takt ? m.tauBn / m.takt : 0), m.overTakt || m.down],
+        ['03  WIP', pad(m.wip, 2), m.little > 0.05 ? ('L ' + m.little.toFixed(1)) : 'ON LINE', Math.min(1, m.n ? m.wip / (m.n * (BUFFER + 1)) : 0), false],
+        ['04  OEE', pad(Math.round(m.oee * 100), 2), m.block, m.oee, m.down || m.oee < 0.5],
     ];
     const y = 470;
     ctx.strokeStyle = INK;
@@ -1411,8 +1585,7 @@ function drawFigures(t) {
         ctx.fillStyle = 'rgba(17,17,17,0.12)';
         ctx.fillRect(x, y + 176, bw, 4);
         ctx.fillStyle = c[4] ? ACCENT : INK;
-        const wobble = c[4] ? (0.85 + 0.15 * Math.sin((t || 0) * 4)) : 1;
-        ctx.fillRect(x, y + 176, Math.max(0, bw * c[3] * wobble), 4);
+        ctx.fillRect(x, y + 176, Math.max(0, bw * c[3]), 4);
     });
 }
 
@@ -1425,7 +1598,7 @@ function drawTrace(t) {
     ctx.font = '600 16px ' + SANS;
     ctx.textAlign = 'left';
     ctx.letterSpacing = '3px';
-    ctx.fillText('THROUGHPUT', x0, y);
+    ctx.fillText('GOOD OUTPUT', x0, y);
     ctx.letterSpacing = '0px';
     ctx.strokeStyle = INK;
     ctx.lineWidth = 1.5;
@@ -1459,37 +1632,53 @@ function drawTrace(t) {
         else ctx.lineTo(x, py);
     });
     ctx.stroke();
-    const scan = x0 + (((t || 0) * 90) % (x1 - x0));
-    ctx.strokeStyle = ACCENT;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(scan, y + 18);
-    ctx.lineTo(scan, y + 18 + h);
-    ctx.stroke();
 }
 
-function drawColumns(t) {
-    const stations = lineState ? lineState.stations : [];
-    const n = stations.length || 1;
+function drawColumns() {
+    const mtr = lineMetrics();
+    const gates = lineState ? lineState.stations.filter(s => s.gate) : [];
+    const n = gates.length || 1;
     const y = 900;
-    const h = 118;
+    const h = 110;
+    const scale = Math.max(mtr.takt * 2.6, 1);
     ctx.fillStyle = INK;
     ctx.font = '600 16px ' + SANS;
     ctx.textAlign = 'left';
     ctx.letterSpacing = '3px';
-    ctx.fillText('STATIONS', 96, y);
+    ctx.fillText('BALANCE', 96, y);
     ctx.letterSpacing = '0px';
-    stations.forEach((st, i) => {
+    const taktY = y + 16 + h - (mtr.takt / scale) * h;
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(168, taktY);
+    ctx.lineTo(1864, taktY);
+    ctx.stroke();
+    ctx.fillStyle = MUTE;
+    ctx.font = '400 13px ' + MONO;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('TAKT', 96, taktY);
+    ctx.textBaseline = 'alphabetic';
+    gates.forEach((st, i) => {
+        const machine = lineState.machines.get(st.rm.n);
+        const tau = machine ? machine.tau : processTime(st);
         const x = stationX(i, n);
         const bw = Math.max(10, Math.min(36, (1768 / n) - 10));
+        const colH = Math.min(h, Math.max(8, (tau / scale) * h));
+        const top = y + 16 + h - colH;
         ctx.strokeStyle = INK;
         ctx.lineWidth = 1.5;
-        ctx.strokeRect(x - bw / 2 + 0.5, y + 16.5, bw, h);
-        const phase = ((t || 0) / st.cycle + i * 0.13) % 1;
-        const fill = st.down ? 1 : (st.crew ? phase * 0.45 : phase);
-        ctx.fillStyle = st.down ? ACCENT : INK;
-        const fh = Math.max(0, (h - 2) * fill);
-        ctx.fillRect(x - bw / 2 + 1, y + 16 + h - fh, bw - 2, fh);
+        ctx.strokeRect(x - bw / 2 + 0.5, top + 0.5, bw, colH);
+        const mode = machine ? machine.mode : 'starve';
+        let fill = 0;
+        if (mode === 'down' || mode === 'block') fill = 1;
+        else if (mode === 'run' && machine.tau) fill = Math.max(0, Math.min(1, 1 - machine.remain / machine.tau));
+        if (fill > 0) {
+            ctx.fillStyle = mode === 'down' ? ACCENT : INK;
+            const fh = colH * fill;
+            ctx.fillRect(x - bw / 2 + 1, top + colH - fh, bw - 2, fh);
+        }
     });
 }
 
@@ -1681,7 +1870,7 @@ function drawBand(geom, duty) {
     ctx.fillStyle = MUTE;
     ctx.font = '400 18px ' + MONO;
     ctx.letterSpacing = '0.5px';
-    const wip = lineState ? lineState.parts.length : 0;
+    const wip = lineMetrics().wip;
     const line = 'seed ' + params.seed
         + '   ·   day ' + pad(params.day, 3)
         + '   ·   wip ' + pad(wip, 2)

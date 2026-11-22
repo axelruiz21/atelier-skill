@@ -62,6 +62,8 @@ front-end request — no need to invoke it by name.
 | `assets/canon.css` | Lift-ready component recipes (topbar, panel, placard, instruments). |
 | `assets/generative.js` | Seeded kit: mulberry32, Bridson Poisson-disk, seeded helpers. |
 | `examples/` | Unedited benchmark outputs built under the skill. |
+| `works/maintenance-os.html` | Maintenance OS — seeded duty-cycle instrument. |
+| `works/maintenance-os.md` | Concept note for Duty Cycle. |
 
 ---
 

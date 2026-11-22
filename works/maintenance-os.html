@@ -15,13 +15,22 @@
     The line is sequenced, not drawn. One integer seed still grows the
     plant — a main aisle, cells, a door tree, four services — and then
     the cells are ordered into a process: dock, kitting, press, weld,
-    robot, assembly, test, pack. Parts travel that sequence. An order
-    inside the horizon is a forecast and stays on the register. The
-    station stops on the day a safety or power failure is due, and
-    while a crew is in the cell repairing it. Air or coolant, due and
-    unattended, lengthens the cycle. The board under the belt is the
-    instrument: rate, takt, WIP against Little's law, and OEE as
-    availability times performance times quality.
+    robot, assembly, test, pack. Parts travel that sequence as a mixed
+    model (A, B, C) under either CONWIP pull or push, leveled by batch
+    size (Heijunka at 1) with SMED tool changeovers at robotic stations.
+    An order inside the horizon is a forecast and stays on the register.
+    The station stops on the day a safety or power failure is due, while
+    a crew is repairing it, or when Jidoka pulls the Andon on a defect.
+    Air or coolant, due and unattended, derates servo speed and
+    lengthens the cycle.
+
+    Every processing cell runs a 6-axis articulated manipulator solved
+    with closed-form Pieper inverse kinematics (J1 waist, J2 shoulder,
+    J3 elbow, J4–J6 spherical wrist) and gravity/inertial joint torques.
+    The board under the belt is the instrument: rate, takt, WIP against
+    Little's law and critical WIP W0, OEE as A×P×Q, a 6-axis orthographic
+    cell bay (elevation, plan, J1–J6 telemetry), a stacked Yamazumi
+    balance chart (VA / NVA / SMED against takt), and a live flow trace.
 
     Time is a duty cycle, and a repair is not a new machine. At the
     opening of the duty year every asset samples a Weibull residual from
@@ -66,8 +75,9 @@
 
     Algorithms: mulberry32 · Fisher–Yates shuffle · recursive binary
     space partition · BFS door tree · Weibull conditional residual ·
-    Kijima Type I · priority dispatch · finite-buffer serial line ·
-    takt · Little's law · OEE.
+    Kijima Type I · priority dispatch · CONWIP pull · Heijunka & SMED ·
+    Jidoka Andon · Yamazumi balance · Little's law · Factory Physics W0 ·
+    6-DOF Pieper inverse kinematics & dynamics · OEE.
 
     Axel Ruiz Design — studio canon (atelier), 2026.
 -->
@@ -197,6 +207,7 @@
         border: none; border-radius: 0; cursor: pointer;
     }
     input[type="range"]::-moz-range-thumb:hover { background: var(--accent); }
+    input[type="range"]:disabled { opacity: 0.35; cursor: default; }
 
     .btn {
         display: inline-block; width: 100%;
@@ -220,6 +231,8 @@
     .stack > *:last-child { margin-bottom: 0; }
 
     .toggle { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; }
+    .section-head + .toggle { margin-top: 0; }
+    .toggle + .field { margin-top: 16px; }
     .toggle .name { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; }
     .toggle input[type="checkbox"] {
         appearance: none; -webkit-appearance: none; width: 16px; height: 16px;
@@ -443,7 +456,42 @@
 
         <div class="section">
             <div class="section-head">
-                <span class="idx">04</span><span class="title">Services</span>
+                <span class="idx">04</span><span class="title">Lean</span>
+            </div>
+            <label class="toggle">
+                <span class="name">Pull · CONWIP</span>
+                <input type="checkbox" id="pullCtl" checked>
+            </label>
+            <div class="field">
+                <div class="field-label">
+                    <span class="name">Kanban Cap</span>
+                    <span class="val" id="kanbanVal">10</span>
+                </div>
+                <input type="range" id="kanbanCtl" min="4" max="24" step="1" value="10" aria-label="Kanban cap">
+            </div>
+            <div class="field">
+                <div class="field-label">
+                    <span class="name">Batch · Level</span>
+                    <span class="val" id="batchVal">1 · level</span>
+                </div>
+                <input type="range" id="batchCtl" min="1" max="6" step="1" value="1" aria-label="Batch size">
+            </div>
+            <div class="field">
+                <div class="field-label">
+                    <span class="name">SMED Setup</span>
+                    <span class="val" id="smedVal">3 s</span>
+                </div>
+                <input type="range" id="smedCtl" min="0" max="12" step="1" value="3" aria-label="SMED setup seconds">
+            </div>
+            <label class="toggle">
+                <span class="name">Jidoka · Andon</span>
+                <input type="checkbox" id="jidokaCtl" checked>
+            </label>
+        </div>
+
+        <div class="section">
+            <div class="section-head">
+                <span class="idx">05</span><span class="title">Services</span>
             </div>
             <div class="svc-grid" id="svcGrid">
                 <button class="btn is-on wide" type="button" data-svc="ALL">All Services</button>
@@ -465,7 +513,7 @@
 
         <div class="section">
             <div class="section-head">
-                <span class="idx">05</span><span class="title">Output</span>
+                <span class="idx">06</span><span class="title">Output</span>
             </div>
             <button class="btn accent" id="exportBtn" type="button">Download PNG · 2×</button>
         </div>
@@ -571,12 +619,18 @@ const params = {
     get horizon()   { return +el('horizonCtl').value; },
     get occupancy() { return +el('occCtl').value / 100; },
     get crew()      { return +el('crewCtl').value; },
+    get pull()      { return el('pullCtl').checked; },
+    get kanban()    { return +el('kanbanCtl').value; },
+    get batch()     { return +el('batchCtl').value; },
+    get smed()      { return +el('smedCtl').value; },
+    get jidoka()    { return el('jidokaCtl').checked; },
     service: 'ALL',
     get showPM()    { return el('pmCtl').checked; },
     get showNames() { return el('namesCtl').checked; },
 };
 
 let focusKey = null;
+let inspectCell = null;
 
 function pad(n, w) {
     return String(Math.max(0, Math.round(n))).padStart(w, '0');
@@ -889,200 +943,352 @@ function buildDuty(seed, geom, p) {
     return { assets: visible, orders, census };
 }
 
-/* ================= THE SHEET ================= */
-
-/* Break any diagonal into an L, so every filament is a ruled line. */
-function orthogonalize(pts) {
-    const out = [];
-    for (const p of pts) {
-        if (!out.length) { out.push(p); continue; }
-        const a = out[out.length - 1];
-        if (Math.abs(a.x - p.x) < 0.5 && Math.abs(a.y - p.y) < 0.5) continue;
-        if (Math.abs(a.x - p.x) > 0.5 && Math.abs(a.y - p.y) > 0.5) {
-            out.push({ x: p.x, y: a.y });
-        }
-        out.push(p);
-    }
-    return out;
-}
-
-function segmentsOf(poly) {
-    const segs = [];
-    for (let i = 0; i < poly.length - 1; i++) {
-        const A = poly[i], B = poly[i + 1];
-        if (Math.abs(A.x - B.x) < 0.5 && Math.abs(A.y - B.y) < 0.5) continue;
-        segs.push([A.x, A.y, B.x, B.y]);
-    }
-    return segs;
-}
-
-/* Door-tree route, inset off the wall so the filament survives the
-   wall stroke. A stub sits inside the served room; each ancestor is
-   marked just inside its own door; the run enters the hall and elbows
-   once to that service's riser. */
-function routeToRiser(rm, hall, riser) {
-    const pts = [];
-    if (rm.door) {
-        pts.push({
-            x: rm.door.mx + rm.door.nx * 28,
-            y: rm.door.my + rm.door.ny * 28,
-        });
-    } else {
-        pts.push({ x: rm.x + rm.w / 2, y: rm.y + rm.h / 2 });
-    }
-    let cur = rm;
-    let guard = 0;
-    while (cur.parent && cur.parent !== hall && guard++ < 24) {
-        const d = cur.parent.door;
-        if (d) pts.push({ x: d.mx + d.nx * 22, y: d.my + d.ny * 22 });
-        cur = cur.parent;
-    }
-    if (cur && cur.door) {
-        pts.push({
-            x: cur.door.mx - cur.door.nx * 20,
-            y: cur.door.my - cur.door.ny * 20,
-        });
-    }
-    const chase = orthogonalize(pts);
-    const last = chase.length ? chase[chase.length - 1] : pts[0];
-    const fan = orthogonalize([last, { x: riser.x, y: riser.y }]);
-    return { chase, fan };
-}
-
-function serviceLayers(geom, assets) {
-    const hall = geom.hall;
-    const chase = new Map();
-    const fans = [[], [], [], []];
-    const fanRoom = [[], [], [], []];
-    const trunks = [null, null, null, null];
-    const present = [false, false, false, false];
-    for (const a of assets) present[a.si] = true;
-
-    for (let si = 0; si < 4; si++) {
-        if (!present[si]) continue;
-        const off = (si - 1.5) * 9;
-        const riser = geom.vertical
-            ? { x: Math.round(hall.x + hall.w / 2 + off), y: Math.round(hall.y + hall.h / 2) }
-            : { x: Math.round(hall.x + hall.w / 2), y: Math.round(hall.y + hall.h / 2 + off) };
-        trunks[si] = geom.vertical
-            ? [riser.x, hall.y + 22, riser.x, hall.y + hall.h - 22]
-            : [hall.x + 22, riser.y, hall.x + hall.w - 22, riser.y];
-        for (const a of assets) {
-            if (a.si !== si || a.rm === hall || !a.rm.parent) continue;
-            const route = routeToRiser(a.rm, hall, riser);
-            for (const seg of segmentsOf(route.chase)) {
-                const k = seg.map(n => Math.round(n)).join(',');
-                const k2 = [seg[2], seg[3], seg[0], seg[1]].map(n => Math.round(n)).join(',');
-                if (!chase.has(k) && !chase.has(k2)) chase.set(k, seg);
-            }
-            for (const seg of segmentsOf(route.fan)) {
-                fans[si].push(seg);
-                fanRoom[si].push(a.rm.n);
-            }
-        }
-    }
-    return { chase: Array.from(chase.values()), fans, fanRoom, trunks };
-}
-
-function strokeSegs(segs) {
-    ctx.beginPath();
-    for (const s of segs) {
-        if (!s || s.length < 4) continue;
-        ctx.moveTo(s[0], s[1]);
-        ctx.lineTo(s[2], s[3]);
-    }
-    ctx.stroke();
-}
-
-/* Display speeds, px/s. Air is the quick utility, safety the slow watch.
-   Not part of the seed: the same parameters export the same settled sheet. */
-const FLOW = [168, 112, 74, 46];
-const DASH = 16;
-const GAP = 22;
-
 const motion = { t: 0, year: 0 };
 
-function strokeFlow(segs, speed, color, width, t) {
-    if (!segs.length) return;
-    const period = DASH + GAP;
-    ctx.save();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = width;
-    ctx.setLineDash([DASH, GAP]);
-    ctx.lineDashOffset = -((t * speed) % period);
-    strokeSegs(segs);
-    ctx.restore();
+/* ================= 6-AXIS ARTICULATED ROBOTICS ================= */
+
+/* Standard 6R serial manipulator with spherical wrist (mm, kg, deg/s, N·m),
+   ABB IRB 2600 / FANUC M-20iD class geometry. */
+const ROBOT_DH = { D1: 445, A1: 150, A2: 700, D4: 795, D6: 135 };
+const JOINT_SPEC = [
+    { id: 'J1', role: 'WAIST',  wMax: 175, tMax: 240, inertia: 18 },
+    { id: 'J2', role: 'SHLDR',  wMax: 175, tMax: 320, inertia: 24 },
+    { id: 'J3', role: 'ELBOW',  wMax: 175, tMax: 190, inertia: 12 },
+    { id: 'J4', role: 'W-ROLL', wMax: 360, tMax: 65,  inertia: 2.2 },
+    { id: 'J5', role: 'W-PTCH', wMax: 360, tMax: 65,  inertia: 2.0 },
+    { id: 'J6', role: 'FLANGE', wMax: 500, tMax: 40,  inertia: 0.8 },
+];
+
+const CELL_TASK = {
+    DOCK:   { va: 0.48, payload: 16, smed: false, robot: false, eoat: 'DEPALLET' },
+    KITT:   { va: 0.55, payload: 9,  smed: false, robot: false, eoat: 'KIT PICK' },
+    ASRS:   { va: 0.52, payload: 18, smed: false, robot: false, eoat: 'SHUTTLE' },
+    PRESS:  { va: 0.64, payload: 17, smed: true,  robot: true,  eoat: 'DIE LOADER' },
+    CNC:    { va: 0.78, payload: 15, smed: true,  robot: true,  eoat: 'CHUCK GRIP' },
+    LASER:  { va: 0.75, payload: 12, smed: true,  robot: true,  eoat: 'FIBER HEAD' },
+    WELD:   { va: 0.72, payload: 11, smed: true,  robot: true,  eoat: 'MIG TORCH' },
+    ROBOT:  { va: 0.56, payload: 18, smed: true,  robot: true,  eoat: 'VAC GRIP' },
+    GANTRY: { va: 0.54, payload: 20, smed: false, robot: false, eoat: 'SERVO LIFT' },
+    ASSY:   { va: 0.68, payload: 14, smed: true,  robot: true,  eoat: 'NUTRUNNER' },
+    PAINT:  { va: 0.74, payload: 8,  smed: true,  robot: true,  eoat: 'HVLP GUN' },
+    VISION: { va: 0.72, payload: 6,  smed: false, robot: false, eoat: 'LINE CAM' },
+    METRO:  { va: 0.66, payload: 7,  smed: false, robot: true,  eoat: 'OPTIC CMM' },
+    TEST:   { va: 0.70, payload: 9,  smed: true,  robot: true,  eoat: 'EOL PROBE' },
+    PACK:   { va: 0.58, payload: 16, smed: true,  robot: true,  eoat: 'PALLET GRIP' },
+};
+
+const SKUS = ['A', 'B', 'C'];
+const SKU_MULT = { A: 1.0, B: 1.14, C: 0.88 };
+const SKU_DZ   = { A: 0,   B: 52,   C: -44 };
+
+function quintic(t) {
+    const x = Math.max(0, Math.min(1, t));
+    return x * x * x * (10 + x * (-15 + 6 * x));
 }
 
-function supplyPath(rm, hall, si) {
-    const off = (si - 1.5) * 9;
-    const riser = hall.h >= hall.w
-        ? { x: Math.round(hall.x + hall.w / 2 + off), y: Math.round(hall.y + hall.h / 2) }
-        : { x: Math.round(hall.x + hall.w / 2), y: Math.round(hall.y + hall.h / 2 + off) };
-    const route = routeToRiser(rm, hall, riser);
-    const pts = [];
-    const push = p => {
-        const last = pts[pts.length - 1];
-        if (!last || Math.hypot(last.x - p.x, last.y - p.y) > 0.5) pts.push(p);
+function lerp3(a, b, t) {
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
+
+function rotFromTool(pitch, yaw, roll) {
+    const sp = Math.sin(pitch), cp = Math.cos(pitch);
+    const sy = Math.sin(yaw), cy = Math.cos(yaw);
+    const z6 = [sp * cy, sp * sy, -cp];
+    const x0 = [cp * cy, cp * sy, sp];
+    const y0 = [
+        z6[1] * x0[2] - z6[2] * x0[1],
+        z6[2] * x0[0] - z6[0] * x0[2],
+        z6[0] * x0[1] - z6[1] * x0[0],
+    ];
+    const cr = Math.cos(roll), sr = Math.sin(roll);
+    return [
+        [cr * x0[0] + sr * y0[0], cr * x0[1] + sr * y0[1], cr * x0[2] + sr * y0[2]],
+        [-sr * x0[0] + cr * y0[0], -sr * x0[1] + cr * y0[1], -sr * x0[2] + cr * y0[2]],
+        z6,
+    ];
+}
+
+function fk6(q) {
+    const { D1, A1, A2, D4, D6 } = ROBOT_DH;
+    const [q1, q2, q3, q4, q5, q6] = q;
+    const c1 = Math.cos(q1), s1 = Math.sin(q1);
+    const p2 = [A1 * c1, A1 * s1, D1];
+    const s2 = Math.sin(q2), c2 = Math.cos(q2);
+    const p3 = [p2[0] + A2 * s2 * c1, p2[1] + A2 * s2 * s1, p2[2] + A2 * c2];
+    const b = q2 + q3;
+    const sb = Math.sin(b), cb = Math.cos(b);
+    const x3 = [cb * c1, cb * s1, -sb];
+    const y3 = [-s1, c1, 0];
+    const z3 = [sb * c1, sb * s1, cb];
+    const pw = [p3[0] + D4 * z3[0], p3[1] + D4 * z3[1], p3[2] + D4 * z3[2]];
+
+    const c4 = Math.cos(q4), s4 = Math.sin(q4);
+    const c5 = Math.cos(q5), s5 = Math.sin(q5);
+    const c6 = Math.cos(q6), s6 = Math.sin(q6);
+    const r00 = c4 * c5 * c6 - s4 * s6, r01 = -c4 * c5 * s6 - s4 * c6, r02 = c4 * s5;
+    const r10 = s4 * c5 * c6 + c4 * s6, r11 = -s4 * c5 * s6 + c4 * c6, r12 = s4 * s5;
+    const r20 = -s5 * c6,               r21 = s5 * s6,                 r22 = c5;
+    const mul = (a, bb, c) => [
+        x3[0] * a + y3[0] * bb + z3[0] * c,
+        x3[1] * a + y3[1] * bb + z3[1] * c,
+        x3[2] * a + y3[2] * bb + z3[2] * c,
+    ];
+    const x6 = mul(r00, r10, r20);
+    const y6 = mul(r01, r11, r21);
+    const z6 = mul(r02, r12, r22);
+    const tcp = [pw[0] + D6 * z6[0], pw[1] + D6 * z6[1], pw[2] + D6 * z6[2]];
+    const mu = Math.abs(Math.sin(q3) * Math.sin(q5));
+    return { p0: [0, 0, 0], p1: [0, 0, D1], p2, p3, pw, tcp, x6, y6, z6, mu };
+}
+
+function ik6(pos, pitch, yaw, roll, prev) {
+    const { D1, A1, A2, D4, D6 } = ROBOT_DH;
+    const [x6, y6, z6] = rotFromTool(pitch, yaw, roll);
+    const pw = [pos[0] - D6 * z6[0], pos[1] - D6 * z6[1], pos[2] - D6 * z6[2]];
+    const q1 = Math.atan2(pw[1], pw[0]);
+    const r = Math.hypot(pw[0], pw[1]) - A1;
+    const s = pw[2] - D1;
+    const D = Math.max(-0.996, Math.min(0.996, (r * r + s * s - A2 * A2 - D4 * D4) / (2 * A2 * D4)));
+    const q3 = Math.acos(D);
+    const phi = Math.atan2(r, s);
+    const psi = Math.atan2(D4 * Math.sin(q3), A2 + D4 * Math.cos(q3));
+    const q2 = phi - psi;
+
+    const c1 = Math.cos(q1), s1 = Math.sin(q1);
+    const b = q2 + q3, sb = Math.sin(b), cb = Math.cos(b);
+    const x3 = [cb * c1, cb * s1, -sb];
+    const y3 = [-s1, c1, 0];
+    const z3 = [sb * c1, sb * s1, cb];
+    const dot = (u, v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+    const M00 = dot(x3, x6), M02 = dot(x3, z6);
+    const M10 = dot(y3, x6), M12 = dot(y3, z6);
+    const M20 = dot(z3, x6), M21 = dot(z3, y6), M22 = dot(z3, z6);
+
+    const q5 = Math.acos(Math.max(-1, Math.min(1, M22)));
+    let q4, q6;
+    if (Math.sin(q5) > 1e-4) {
+        q4 = Math.atan2(M12, M02);
+        q6 = Math.atan2(M21, -M20);
+    } else {
+        q4 = prev ? prev[3] : 0;
+        q6 = Math.atan2(M10, M00) - q4;
+    }
+    return [q1, q2, q3, q4, q5, q6];
+}
+
+function wrapDiff(a, b) {
+    let d = a - b;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    return d;
+}
+
+function processPathPose(prog, p, sku, partId) {
+    const dz = SKU_DZ[sku] || 0;
+    const u = Math.max(0, Math.min(1, p));
+    if (prog === 'PAINT') {
+        const passes = 4;
+        const seg = Math.min(passes - 1, Math.floor(u * passes));
+        const f = u * passes - seg;
+        const dir = seg % 2 === 0 ? 1 : -1;
+        const y = dir > 0 ? (-310 + 620 * f) : (310 - 620 * f);
+        const z = 510 + dz + seg * 115;
+        const x = 1040 + 70 * Math.sin(u * Math.PI);
+        return { pos: [x, y, z], pitch: 0.78, yaw: 0, roll: dir * 0.25 };
+    }
+    if (prog === 'WELD') {
+        const pts = [
+            [920, -250, 520 + dz],
+            [1150, -160, 540 + dz],
+            [1150,  160, 540 + dz],
+            [920,  250, 520 + dz],
+        ];
+        const seg = Math.min(2, Math.floor(u * 3));
+        const f = u * 3 - seg;
+        const pos = lerp3(pts[seg], pts[seg + 1], f);
+        return { pos, pitch: 0.48, yaw: 0.28 * Math.sin(u * Math.PI * 2), roll: 0.3 * u };
+    }
+    if (prog === 'LASER') {
+        const pts = [
+            [890, -210, 490 + dz],
+            [1170, -210, 490 + dz],
+            [1170,  210, 490 + dz],
+            [890,  210, 490 + dz],
+            [890, -210, 490 + dz],
+        ];
+        const seg = Math.min(3, Math.floor(u * 4));
+        const pos = lerp3(pts[seg], pts[seg + 1], u * 4 - seg);
+        return { pos, pitch: 0.08, yaw: seg * 1.57, roll: u * 3.14 };
+    }
+    if (prog === 'ASSY') {
+        const bolts = [
+            [940, -160], [1140, -160], [1140, 160], [940, 160],
+        ];
+        const idx = Math.min(3, Math.floor(u * 4));
+        const f = u * 4 - idx;
+        const [bx, by] = bolts[idx];
+        const depth = f < 0.35 ? quintic(f / 0.35) : (f < 0.72 ? 1 : 1 - quintic((f - 0.72) / 0.28));
+        const z = 760 + dz - depth * 230;
+        const spin = f >= 0.35 && f <= 0.72 ? (f - 0.35) * 18 : 0;
+        return { pos: [bx, by, z], pitch: 0.06, yaw: 0, roll: spin };
+    }
+    if (prog === 'PRESS') {
+        const s = u < 0.35 ? quintic(u / 0.35) : (u < 0.65 ? 1 : 1 - quintic((u - 0.65) / 0.35));
+        const x = 860 + s * 440;
+        const y = -220 + u * 440;
+        const z = 620 + dz + (1 - s) * 160;
+        return { pos: [x, y, z], pitch: 1.05 * s + 0.25, yaw: 0, roll: 0 };
+    }
+    if (prog === 'CNC') {
+        const s = Math.sin(u * Math.PI);
+        const x = 900 + s * 290;
+        const y = -200 + u * 400;
+        const z = 720 + dz - 120 * Math.sin(u * Math.PI * 2);
+        return { pos: [x, y, z], pitch: 0.85 * s + 0.2, yaw: 0.15, roll: u * 1.57 };
+    }
+    if (prog === 'PACK') {
+        const slot = (partId || 0) % 6;
+        const px = 940 + (slot % 3) * 110;
+        const py = 210 + Math.floor(slot / 3) * 160;
+        const pz = 440 + Math.floor(slot / 3) * 70 + dz * 0.4;
+        if (u < 0.45) {
+            const s = quintic(u / 0.45);
+            return { pos: lerp3([900, -340, 560], [980, -40, 900], s), pitch: 0.1, yaw: 0, roll: s * 1.57 };
+        }
+        const s = quintic((u - 0.45) / 0.55);
+        return { pos: lerp3([980, -40, 900], [px, py, pz], s), pitch: 0.1, yaw: 0.3 * s, roll: 1.57 };
+    }
+    if (prog === 'METRO') {
+        const ang = -0.75 + u * 1.5;
+        const x = 1040 + 180 * Math.cos(ang);
+        const y = 260 * Math.sin(ang);
+        const z = 760 + dz + 90 * Math.cos(ang * 2);
+        return { pos: [x, y, z], pitch: 0.52, yaw: -ang * 0.7, roll: ang };
+    }
+    if (prog === 'TEST') {
+        const pts = [[960, -170], [1060, 0], [960, 170]];
+        const idx = Math.min(2, Math.floor(u * 3));
+        const f = u * 3 - idx;
+        const touch = Math.sin(f * Math.PI);
+        return { pos: [pts[idx][0], pts[idx][1], 740 + dz - touch * 190], pitch: 0.12, yaw: 0, roll: 0 };
+    }
+    const s = quintic(u);
+    const y = -440 + 880 * s;
+    const x = 940 + 180 * Math.sin(s * Math.PI);
+    const z = 540 + dz + 320 * Math.sin(s * Math.PI);
+    return { pos: [x, y, z], pitch: 0.18, yaw: 0.35 * Math.sin(s * Math.PI), roll: s * 1.57 };
+}
+
+function sampleCellPose(prog, m, uOverride) {
+    const mode = m ? m.mode : 'starve';
+    const sku = (m && m.busy && m.busy.sku) || (m && m.lastSku) || 'A';
+    const partId = (m && m.busy && m.busy.id) || 0;
+    const u = uOverride != null ? uOverride : (m ? m.u : 0);
+
+    if (mode === 'starve') {
+        return { pos: [880, 0, 910], pitch: 0.22, yaw: 0, roll: 0, phase: 'STARVED' };
+    }
+    if (mode === 'block') {
+        return { pos: [900, 410, 640], pitch: 0.14, yaw: 0.4, roll: 0.2, phase: 'BLOCKED' };
+    }
+    if (mode === 'setup') {
+        const s = Math.sin(Math.max(0, Math.min(1, u)) * Math.PI);
+        const pos = lerp3([880, 0, 910], [690, -470, 860], quintic(s));
+        return { pos, pitch: 0.22 + 0.72 * s, yaw: -0.6 * s, roll: 1.57 * s, phase: 'SMED SWAP' };
+    }
+
+    const task = CELL_TASK[prog] || CELL_TASK.ROBOT;
+    const vaFrac = Math.max(0.35, Math.min(0.84, task.va));
+    const appEnd = (1 - vaFrac) * 0.5;
+    const vaEnd = appEnd + vaFrac;
+    const startP = processPathPose(prog, 0, sku, partId);
+    const endP = processPathPose(prog, 1, sku, partId);
+    let pose;
+    if (u < appEnd) {
+        const s = quintic(u / Math.max(0.01, appEnd));
+        const mid = [940, -210, 880];
+        const pos = s < 0.5 ? lerp3([860, -420, 620], mid, s * 2) : lerp3(mid, startP.pos, (s - 0.5) * 2);
+        pose = { pos, pitch: 0.15 + (startP.pitch - 0.15) * s, yaw: startP.yaw * s, roll: startP.roll * s, phase: 'APPROACH' };
+    } else if (u <= vaEnd) {
+        const pu = (u - appEnd) / Math.max(0.01, vaEnd - appEnd);
+        pose = processPathPose(prog, pu, sku, partId);
+        pose.phase = 'PROCESS';
+    } else {
+        const s = quintic((u - vaEnd) / Math.max(0.01, 1 - vaEnd));
+        const mid = [940, 210, 880];
+        const pos = s < 0.5 ? lerp3(endP.pos, mid, s * 2) : lerp3(mid, [900, 410, 640], (s - 0.5) * 2);
+        pose = { pos, pitch: endP.pitch * (1 - s) + 0.14 * s, yaw: endP.yaw * (1 - s) + 0.4 * s, roll: endP.roll * (1 - s), phase: 'RETRACT' };
+    }
+    if (mode === 'down') pose.phase = 'E-STOP';
+    else if (mode === 'andon') pose.phase = 'ANDON';
+    return pose;
+}
+
+function robotCellTelemetry(st, m) {
+    const prog = st.rm.program;
+    const task = CELL_TASK[prog] || CELL_TASK.ROBOT;
+    const mode = m ? m.mode : 'starve';
+    const moving = mode === 'run' || mode === 'setup';
+    const tau = Math.max(1, mode === 'setup' ? (m.setupTotal || 3) : (m ? m.tau : 6));
+    const u = m ? Math.max(0, Math.min(1, m.u)) : 0;
+
+    const pNow = sampleCellPose(prog, m, u);
+    const q = ik6(pNow.pos, pNow.pitch, pNow.yaw, pNow.roll);
+    const fk = fk6(q);
+
+    const dq = [0, 0, 0, 0, 0, 0];
+    const ddq = [0, 0, 0, 0, 0, 0];
+    if (moving) {
+        const du = 0.008;
+        const dt = du * tau;
+        const p1 = sampleCellPose(prog, m, Math.max(0, u - du));
+        const p2 = sampleCellPose(prog, m, Math.max(0, u - 2 * du));
+        const q1 = ik6(p1.pos, p1.pitch, p1.yaw, p1.roll, q);
+        const q2 = ik6(p2.pos, p2.pitch, p2.yaw, p2.roll, q1);
+        for (let i = 0; i < 6; i++) {
+            const v1 = wrapDiff(q[i], q1[i]) / dt;
+            const v0 = wrapDiff(q1[i], q2[i]) / dt;
+            dq[i] = v1;
+            ddq[i] = Math.max(-18, Math.min(18, (v1 - v0) / dt));
+        }
+    }
+
+    const g = 9.81;
+    const a2 = ROBOT_DH.A2 / 1000, d4 = ROBOT_DH.D4 / 1000, d6 = ROBOT_DH.D6 / 1000;
+    const m2 = 28, m3 = 22, mp = task.payload;
+    const s2 = Math.sin(q[1]), s23 = Math.sin(q[1] + q[2]);
+    const toolR = Math.hypot(fk.z6[0], fk.z6[1]);
+    const g2 = g * (m2 * (a2 * 0.5) * s2 + m3 * (a2 * s2 + (d4 * 0.5) * s23) + mp * (a2 * s2 + d4 * s23 + d6 * toolR));
+    const g3 = g * (m3 * (d4 * 0.5) * s23 + mp * (d4 * s23 + d6 * toolR));
+    const g5 = g * mp * d6 * toolR;
+    const procLoad = pNow.phase === 'PROCESS' && prog === 'ASSY' ? 18 : (pNow.phase === 'PROCESS' ? 4 : 0);
+
+    const torques = [
+        Math.abs(JOINT_SPEC[0].inertia * ddq[0] + 2.4 * dq[0]),
+        Math.abs(g2 + JOINT_SPEC[1].inertia * ddq[1]),
+        Math.abs(g3 + JOINT_SPEC[2].inertia * ddq[2]),
+        Math.abs(JOINT_SPEC[3].inertia * ddq[3] + 0.8 * dq[3] + procLoad * 0.35),
+        Math.abs(g5 + JOINT_SPEC[4].inertia * ddq[4]),
+        Math.abs(JOINT_SPEC[5].inertia * ddq[5] + 0.3 * dq[5] + procLoad),
+    ];
+
+    const sku = (m && m.busy && m.busy.sku) || (m && m.lastSku) || 'A';
+    const partId = (m && m.busy && m.busy.id) || 0;
+    const trail = [];
+    for (let k = 0; k <= 24; k++) {
+        trail.push(processPathPose(prog, k / 24, sku, partId).pos);
+    }
+
+    return {
+        prog, eoat: task.eoat, sku, mode, phase: pNow.phase,
+        q, dq, torques, fk, trail,
+        mu: fk.mu,
+        degraded: !!st.degraded,
+        down: mode === 'down' || mode === 'andon',
     };
-    for (let i = route.fan.length - 1; i >= 0; i--) push(route.fan[i]);
-    for (let i = route.chase.length - 1; i >= 0; i--) push(route.chase[i]);
-    if (!pts.length) pts.push(riser);
-    return pts;
 }
 
-function pointAlong(pts, dist) {
-    let d = dist;
-    for (let i = 1; i < pts.length; i++) {
-        const len = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-        if (d <= len || i === pts.length - 1) {
-            const u = len ? Math.min(1, d / len) : 0;
-            return {
-                x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * u,
-                y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * u,
-            };
-        }
-        d -= len;
-    }
-    return pts[0];
-}
-
-function pathLength(pts) {
-    let L = 0;
-    for (let i = 1; i < pts.length; i++) {
-        L += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-    }
-    return L;
-}
-
-function drawTravelers(geom, orders, t) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(PLAN.x + 3, PLAN.y + 3, PLAN.w - 6, PLAN.h - 6);
-    ctx.clip();
-    const size = 16;
-    for (const o of orders) {
-        if (o.state !== 'OPEN' && o.state !== 'CREW') continue;
-        if (o.room === geom.hall || !o.room.parent) continue;
-        const si = SERVICES.findIndex(s => s.id === o.svc.id);
-        if (si < 0) continue;
-        const pts = supplyPath(o.room, geom.hall, si);
-        const L = pathLength(pts);
-        if (L < 8) continue;
-        let dist;
-        if (o.state === 'CREW') {
-            const u = (t / 5.6 + o.room.n * 0.09) % 1;
-            const ping = u < 0.5 ? u * 2 : 2 - u * 2;
-            dist = ping * L;
-        } else {
-            dist = ((t / 3.1 + o.room.n * 0.13) % 1) * L;
-        }
-        const p = pointAlong(pts, dist);
-        ctx.fillStyle = o.state === 'OPEN' ? ACCENT : INK;
-        ctx.fillRect(Math.round(p.x - size / 2), Math.round(p.y - size / 2), size, size);
-    }
-    ctx.restore();
-}
+/* ================= LEAN SERIAL LINE ================= */
 
 const LINE_ORDER = [
     'DOCK', 'KITT', 'ASRS', 'PRESS', 'CNC', 'LASER', 'WELD', 'ROBOT', 'GANTRY',
@@ -1090,20 +1296,21 @@ const LINE_ORDER = [
 ];
 const SUPPORT = ['CRIB', 'AGV', 'PLC', 'MECH'];
 /* Nominal process time, seconds. The line can run no faster than the
-   longest of these once age and a crew in the cell have stretched it. */
+   longest of these once age, SMED setup, and fault derate stretch it. */
 const PROCESS = {
     DOCK: 3.4, KITT: 4.8, ASRS: 6.2, PRESS: 9.6, CNC: 14.5,
     LASER: 11.2, WELD: 12.8, ROBOT: 8.4, GANTRY: 7.2, ASSY: 10.6,
     PAINT: 13.4, VISION: 3.6, METRO: 5.4, TEST: 8.8, PACK: 4.2,
 };
-const BUFFER = 2;
-/* Wall time to process time. A worn bottleneck is still a visible cycle. */
-const TIME_SCALE = 24;
-/* Rate, availability, and Little's law are read over this many process seconds. */
+/* Wall time to process time: 14× keeps an 18 s bottleneck cycle readable
+   at ~1.3 s so all 6 articulated joints track smoothly in real time. */
+const TIME_SCALE = 14;
+/* Rolling horizon for rate, Little's law, FPY, and OEE (process seconds). */
 const WINDOW = 120;
 
 let lineState = null;
 let plantSig = '';
+let stationHits = [];
 
 function lineStations(geom, duty) {
     const cells = geom.rooms.filter(rm => rm.program !== 'AISLE');
@@ -1118,10 +1325,6 @@ function lineStations(geom, duty) {
         if (da !== db) return da - db;
         return a.n - b.n;
     });
-    /* A forecast is not a breakdown. The order sits on the register
-       until the day it is due. That day, a safety or power failure
-       stops the cell, and so does a crew repairing it. Air or coolant,
-       due and unattended, only lengthens the cycle. */
     const dueToday = o => o.kind === 'COR' && o.days >= 0 && o.days < 1;
     return cells.map(rm => {
         const gate = LINE_ORDER.indexOf(rm.program) >= 0;
@@ -1148,19 +1351,43 @@ function ageFactor() {
     return 0.84 + 0.48 * Math.pow(Math.max(0.2, params.age) / 32, 1.05);
 }
 
-/* Nameplate is the station as worn by age, before a crew or a fault. */
 function nameplate(st) {
     return (PROCESS[st.rm.program] || 6) * ageFactor();
 }
 
-function processTime(st) {
-    const wear = (st.crew ? 1.65 : 1) * (st.degraded ? 1.45 : 1);
-    return nameplate(st) * wear;
+function cycleBreakdown(st, sku, lastSku) {
+    const task = CELL_TASK[st.rm.program] || CELL_TASK.ROBOT;
+    const base = nameplate(st);
+    const mult = SKU_MULT[sku] || 1;
+    const wear = st.degraded ? 1.45 : 1;
+    const va = base * task.va * mult * wear;
+    const nva = base * (1 - task.va) * wear;
+    const setup = (task.smed && lastSku && lastSku !== sku && params.smed > 0)
+        ? params.smed * wear : 0;
+    return { va, nva, setup, total: va + nva + setup };
 }
 
-function scrapAt(part, st) {
+/* Expected per-part work content for Yamazumi & Critical WIP W0:
+   includes amortized SMED changeover (smed / batch) and degraded penalty. */
+function expectedCycle(st) {
+    const task = CELL_TASK[st.rm.program] || CELL_TASK.ROBOT;
+    const base = nameplate(st);
+    const wear = st.degraded ? 1.45 : 1;
+    const va = base * task.va;
+    const nva = base * (1 - task.va);
+    const wearExtra = base * (wear - 1);
+    const smedAmort = task.smed ? (params.smed * wear) / Math.max(1, params.batch) : 0;
+    return { va, nva, smed: smedAmort + wearExtra, total: va + nva + smedAmort + wearExtra };
+}
+
+function processTime(st) {
+    return expectedCycle(st).total;
+}
+
+function scrapAt(part, st, contained) {
     const u = mulberry32(mix(mix(params.seed, part.id + 1), st.rm.n * 13 + 7))();
-    const p = Math.min(0.18, 0.008 + 0.028 * (params.age / 50) + (st.pm ? 0.015 : 0));
+    let p = Math.min(0.16, 0.006 + 0.024 * (params.age / 50) + (st.pm ? 0.012 : 0) + (st.degraded ? 0.018 : 0));
+    if (contained) p *= 0.45;
     return u < p;
 }
 
@@ -1176,20 +1403,20 @@ function freshLine(stations) {
         good: 0,
         scrap: 0,
         missed: 0,
-        trace: [],
+        andonCount: 0,
         traceAcc: 0,
-        exitWindow: 0,
+        rateTrace: [],
         exitsAt: [],
         missedAt: [],
+        outcomes: [],
         sojourns: [],
         upWindow: [],
         bnWindow: [],
         marks: [],
     };
     plantSig = params.seed + ':' + params.rooms;
-    /* A fixed warm-up, not the display clock. Long enough for one
-       flow time and a full measurement window, so the edition already
-       sits at the balance the parameters imply. */
+    /* Fixed 480 s warm-up so both live opening and exported editions
+       sit at steady state without touching the display clock. */
     let guard = 0;
     while (lineState.sim < 480 && guard++ < 4000) stepLine(0.5, true);
 }
@@ -1200,102 +1427,6 @@ function syncStations() {
     const key = params.seed + ':' + params.rooms;
     if (!lineState || plantSig !== key || lineState.stations.length !== stations.length) freshLine(stations);
     else lineState.stations = stations;
-}
-
-function stepLine(dt, warming) {
-    if (!lineState || !lineState.stations.length || dt <= 0) return;
-    const simDt = warming ? dt : dt * TIME_SCALE;
-    const gates = lineState.stations.filter(s => s.gate);
-    if (!gates.length) return;
-    const L = lineState;
-    L.sim += simDt;
-    const machines = gates.map(st => {
-        let m = L.machines.get(st.rm.n);
-        if (!m) {
-            m = { queue: [], busy: null, remain: 0, tau: 6, mode: 'starve' };
-            L.machines.set(st.rm.n, m);
-        }
-        m.tau = processTime(st);
-        m.down = !!st.down;
-        m.st = st;
-        return m;
-    });
-
-    for (let i = machines.length - 1; i >= 0; i--) {
-        const m = machines[i];
-        if (m.down) {
-            m.mode = 'down';
-            continue;
-        }
-        if (m.busy && m.remain > 0) {
-            m.remain -= simDt;
-            m.mode = 'run';
-        }
-        if (m.busy && m.remain <= 0) {
-            const next = machines[i + 1];
-            const part = m.busy;
-            if (scrapAt(part, m.st)) {
-                L.scrap++;
-                L.sojourns.push({ t: L.sim, ct: L.sim - part.born });
-                L.marks.push({ i, until: L.sim + 0.8 });
-                m.busy = null;
-            } else if (!next) {
-                L.good++;
-                L.exitWindow++;
-                L.exitsAt.push(L.sim);
-                L.sojourns.push({ t: L.sim, ct: L.sim - part.born });
-                m.busy = null;
-            } else if (next.queue.length < BUFFER) {
-                next.queue.push(part);
-                m.busy = null;
-            } else {
-                m.remain = 0;
-                m.mode = 'block';
-            }
-        }
-        if (!m.busy && m.queue.length) {
-            m.busy = m.queue.shift();
-            m.remain = m.tau;
-            m.mode = 'run';
-        } else if (!m.busy) {
-            m.mode = 'starve';
-        }
-    }
-
-    const takt = taktSeconds();
-    L.takt = takt;
-    const head = machines[0];
-    let guard = 0;
-    while (L.sim >= L.nextRelease && guard++ < 8) {
-        L.nextRelease += takt;
-        if (head && !head.down && head.queue.length < BUFFER) {
-            head.queue.push({ id: ++L.seq, born: L.sim });
-        } else {
-            L.missed++;
-            L.missedAt.push(L.sim);
-        }
-    }
-    L.marks = L.marks.filter(mark => mark.until > L.sim);
-    trimSince(L.exitsAt, L.sim);
-    trimSince(L.missedAt, L.sim);
-    trimSince(L.sojourns, L.sim, 't');
-
-    const blocked = machines.some(m => m.down);
-    L.upWindow.push({ dt: simDt, up: blocked ? 0 : simDt });
-    trimSpan(L.upWindow);
-    const bn = machines.filter(m => !m.down).sort((a, b) => b.tau - a.tau)[0];
-    const bnBusy = bn && (bn.mode === 'run' || bn.mode === 'block');
-    const speed = bn && bn.tau ? nameplate(bn.st) / bn.tau : 1;
-    L.bnWindow.push({ dt: simDt, busy: bnBusy ? simDt : 0, speed });
-    trimSpan(L.bnWindow);
-
-    L.traceAcc += simDt;
-    if (L.traceAcc >= 1) {
-        L.trace.push(L.exitWindow);
-        L.exitWindow = 0;
-        L.traceAcc = 0;
-        if (L.trace.length > 64) L.trace.shift();
-    }
 }
 
 function trimSpan(samples) {
@@ -1316,30 +1447,201 @@ function trimSince(arr, sim, key) {
     if (i) arr.splice(0, i);
 }
 
+function stepLine(dt, warming) {
+    if (!lineState || !lineState.stations.length || dt <= 0) return;
+    const simDt = warming ? dt : dt * TIME_SCALE;
+    const gates = lineState.stations.filter(s => s.gate);
+    if (!gates.length) return;
+    const L = lineState;
+    const bufCap = params.pull ? 1 : 2;
+    L.sim += simDt;
+
+    const machines = gates.map(st => {
+        let m = L.machines.get(st.rm.n);
+        if (!m) {
+            m = {
+                queue: [], busy: null, remain: 0, tau: 6, vaTime: 4, nvaTime: 2,
+                setupRemain: 0, setupTotal: 0, lastSku: null,
+                andonRemain: 0, contained: 0, u: 0, mode: 'starve',
+            };
+            L.machines.set(st.rm.n, m);
+        }
+        m.down = !!st.down;
+        m.st = st;
+        return m;
+    });
+
+    for (let i = machines.length - 1; i >= 0; i--) {
+        const m = machines[i];
+        if (m.down) {
+            m.mode = 'down';
+            continue;
+        }
+        if (m.andonRemain > 0) {
+            m.andonRemain -= simDt;
+            m.mode = 'andon';
+            if (m.andonRemain > 0) continue;
+            m.andonRemain = 0;
+        }
+        if (m.busy && m.setupRemain > 0) {
+            m.setupRemain -= simDt;
+            m.u = 1 - Math.max(0, m.setupRemain) / Math.max(0.1, m.setupTotal);
+            m.mode = 'setup';
+            if (m.setupRemain <= 0) {
+                m.setupRemain = 0;
+                m.lastSku = m.busy.sku;
+                m.remain = m.tau;
+                m.u = 0;
+                m.mode = 'run';
+            }
+            continue;
+        }
+        if (m.busy && m.remain > 0) {
+            m.remain -= simDt;
+            m.u = Math.max(0, Math.min(1, 1 - m.remain / Math.max(0.1, m.tau)));
+            m.mode = 'run';
+        }
+        if (m.busy && m.remain <= 0) {
+            const next = machines[i + 1];
+            const part = m.busy;
+            if (!part.scoredAt || part.scoredAt < i + 1) {
+                part.vaAcc += m.vaTime;
+                part.scoredAt = i + 1;
+            }
+            if (scrapAt(part, m.st, m.contained > 0)) {
+                L.scrap++;
+                L.outcomes.push({ t: L.sim, good: 0 });
+                L.sojourns.push({ t: L.sim, ct: L.sim - part.born, va: part.vaAcc });
+                L.marks.push({ i, until: L.sim + 2.4 });
+                m.busy = null;
+                if (params.jidoka) {
+                    m.andonRemain = 12;
+                    m.contained = 6;
+                    m.mode = 'andon';
+                    L.andonCount++;
+                    continue;
+                }
+            } else if (!next) {
+                L.good++;
+                L.outcomes.push({ t: L.sim, good: 1 });
+                L.exitsAt.push(L.sim);
+                L.sojourns.push({ t: L.sim, ct: L.sim - part.born, va: part.vaAcc });
+                m.busy = null;
+            } else if (next.queue.length < bufCap) {
+                next.queue.push(part);
+                m.busy = null;
+            } else {
+                m.remain = 0;
+                m.u = 1;
+                m.mode = 'block';
+            }
+        }
+        if (!m.busy && m.queue.length) {
+            const part = m.queue.shift();
+            const brk = cycleBreakdown(m.st, part.sku, m.lastSku);
+            m.busy = part;
+            m.tau = brk.va + brk.nva;
+            m.vaTime = brk.va;
+            m.nvaTime = brk.nva;
+            if (m.contained > 0) m.contained--;
+            if (brk.setup > 0.05) {
+                m.setupTotal = brk.setup;
+                m.setupRemain = brk.setup;
+                m.remain = m.tau;
+                m.u = 0;
+                m.mode = 'setup';
+            } else {
+                m.lastSku = part.sku;
+                m.setupTotal = 0;
+                m.setupRemain = 0;
+                m.remain = m.tau;
+                m.u = 0;
+                m.mode = 'run';
+            }
+        } else if (!m.busy) {
+            m.u = 0;
+            m.mode = 'starve';
+        }
+    }
+
+    let wipNow = 0;
+    machines.forEach(m => { wipNow += m.queue.length + (m.busy ? 1 : 0); });
+
+    const takt = taktSeconds();
+    L.takt = takt;
+    const head = machines[0];
+    let guard = 0;
+    while (L.sim >= L.nextRelease && guard++ < 8) {
+        L.nextRelease += takt;
+        const capOk = !params.pull || wipNow < params.kanban;
+        if (capOk && head && !head.down && head.andonRemain <= 0 && head.queue.length < bufCap) {
+            const sku = SKUS[Math.floor(L.seq / Math.max(1, params.batch)) % SKUS.length];
+            head.queue.push({ id: ++L.seq, sku, born: L.sim, vaAcc: 0, scoredAt: 0 });
+            wipNow++;
+        } else {
+            L.missed++;
+            L.missedAt.push(L.sim);
+        }
+    }
+    L.marks = L.marks.filter(mark => mark.until > L.sim);
+    trimSince(L.exitsAt, L.sim);
+    trimSince(L.missedAt, L.sim);
+    trimSince(L.outcomes, L.sim, 't');
+    trimSince(L.sojourns, L.sim, 't');
+
+    const stopped = machines.some(m => m.down || m.mode === 'andon');
+    L.upWindow.push({ dt: simDt, up: stopped ? 0 : simDt });
+    trimSpan(L.upWindow);
+
+    const bn = machines
+        .filter(m => !m.down && m.mode !== 'andon')
+        .sort((a, b) => expectedCycle(b.st).total - expectedCycle(a.st).total)[0];
+    const bnActive = bn && (bn.mode === 'run' || bn.mode === 'block');
+    const speed = bn && bn.st ? (1 / (bn.st.degraded ? 1.45 : 1)) : 1;
+    L.bnWindow.push({ dt: simDt, busy: bnActive ? simDt : 0, speed });
+    trimSpan(L.bnWindow);
+
+    L.traceAcc += simDt;
+    if (L.traceAcc >= 2) {
+        L.traceAcc -= 2;
+        const rateNow = (L.exitsAt.length / WINDOW) * 60;
+        L.rateTrace.push({ rate: rateNow, wip: wipNow });
+        if (L.rateTrace.length > 64) L.rateTrace.shift();
+    }
+}
+
 function lineMetrics() {
     const L = lineState;
     const gates = L ? L.stations.filter(s => s.gate) : [];
     const machines = gates.map(st => L.machines.get(st.rm.n)).filter(Boolean);
     let wip = 0;
     machines.forEach(m => { wip += m.queue.length + (m.busy ? 1 : 0); });
-    const recentExits = L ? L.exitsAt.filter(t => L.sim - t <= WINDOW) : [];
-    const perMin = (recentExits.length / WINDOW) * 60;
-    const recentStay = L ? L.sojourns.filter(s => L.sim - s.t <= WINDOW) : [];
-    const th = recentStay.length / WINDOW;
-    const ct = recentStay.length ? recentStay.reduce((a, s) => a + s.ct, 0) / recentStay.length : 0;
-    const little = th * ct;
+    const perMin = L ? (L.exitsAt.length / WINDOW) * 60 : 0;
+    const stay = L ? L.sojourns : [];
+    const thAll = stay.length / WINDOW;
+    const ct = stay.length ? stay.reduce((a, s) => a + s.ct, 0) / stay.length : 0;
+    const vaMean = stay.length ? stay.reduce((a, s) => a + s.va, 0) / stay.length : 0;
+    const vaRatio = ct > 0.1 ? Math.min(1, vaMean / ct) : 0;
+    const little = thAll * ct;
     const takt = L && L.takt ? L.takt : taktSeconds();
+
+    let T0 = 0;
+    gates.forEach(st => { T0 += expectedCycle(st).total; });
+
     const down = machines.find(m => m.down);
-    const slow = machines.filter(m => !m.down).sort((a, b) => b.tau - a.tau)[0];
-    const constraint = down || slow;
-    const tauBn = constraint ? constraint.tau : 0;
+    const andon = machines.find(m => m.mode === 'andon');
+    const slow = machines
+        .filter(m => !m.down && m.mode !== 'andon')
+        .sort((a, b) => expectedCycle(b.st).total - expectedCycle(a.st).total)[0];
+    const constraint = down || andon || slow;
+    const tauBn = constraint ? expectedCycle(constraint.st).total : 0;
+    const w0 = tauBn > 0 ? T0 / tauBn : 0;
+
     const upSum = L ? L.upWindow.reduce((a, s) => a + s.up, 0) : 0;
     const upSpan = L ? L.upWindow.reduce((a, s) => a + s.dt, 0) : 0;
     const A = upSpan > 0.2 ? upSum / upSpan : 1;
-    let busy = 0;
-    let span = 0;
-    let speedAcc = 0;
-    let speedDt = 0;
+
+    let busy = 0, span = 0, speedAcc = 0, speedDt = 0;
     if (L) {
         L.bnWindow.forEach(s => {
             span += s.dt;
@@ -1352,23 +1654,32 @@ function lineMetrics() {
     }
     const speed = speedDt > 0 ? speedAcc / speedDt : 1;
     const P = span > 0.2 ? Math.max(0, Math.min(1, (busy / span) * speed)) : 1;
-    const finished = L ? L.good + L.scrap : 0;
-    const Q = finished ? L.good / finished : 1;
+
+    const out = L ? L.outcomes : [];
+    const goodWin = out.reduce((a, o) => a + o.good, 0);
+    const Q = out.length ? goodWin / out.length : 1;
     const oee = Math.max(0, Math.min(1, A * P * Q));
-    const missed = L ? L.missedAt.filter(t => L.sim - t <= WINDOW).length : 0;
+    const missed = L ? L.missedAt.length : 0;
+
     return {
         perMin,
+        capMin: tauBn > 0 ? 60 / tauBn : 0,
         takt,
         tauBn,
         wip,
         little,
+        ct,
+        w0,
+        vaRatio,
         oee,
         A, P, Q,
         n: gates.length,
         block: constraint && constraint.st ? constraint.st.rm.program : 'CLEAR',
         down: !!down,
+        andon: !!andon,
         missed,
         overTakt: tauBn > takt + 0.05,
+        constraint,
     };
 }
 
@@ -1385,36 +1696,121 @@ function syncBoard() {
     const demand = 60 / Math.max(0.1, m.takt);
     rate.textContent = fmtRate(m.perMin);
     el('gTakt').textContent = m.takt.toFixed(1);
-    el('gTaktUnit').textContent = m.missed ? ('miss ' + m.missed) : 'seconds';
+    el('gTaktUnit').textContent = m.missed ? ('miss ' + m.missed) : (params.pull ? ('pull ' + m.wip + '/' + params.kanban) : 'seconds');
     el('gWip').textContent = pad(m.wip, 2);
-    el('gWipUnit').textContent = m.little > 0.05 ? ('L ' + m.little.toFixed(1)) : 'on the line';
+    el('gWipUnit').textContent = m.little > 0.05
+        ? ('L ' + m.little.toFixed(1) + ' · W0 ' + m.w0.toFixed(1))
+        : ('W0 ' + m.w0.toFixed(1));
     el('gDown').textContent = pad(Math.round(m.oee * 100), 2);
-    el('gBlock').textContent = m.block.toLowerCase();
+    const reason = m.down ? ' · e-stop' : (m.andon ? ' · andon' : (' · va ' + Math.round(m.vaRatio * 100) + '%'));
+    el('gBlock').textContent = m.block.toLowerCase() + reason;
     const law = el('placardLaw');
     if (law) {
         law.textContent = 'A ' + pad(Math.round(m.A * 100), 2)
             + ' · P ' + pad(Math.round(m.P * 100), 2)
-            + ' · Q ' + pad(Math.round(m.Q * 100), 2);
+            + ' · Q ' + pad(Math.round(m.Q * 100), 2)
+            + ' · CT ' + Math.round(m.ct) + 's';
     }
+    const maxWip = params.pull ? Math.max(1, params.kanban) : Math.max(1, m.n * 3);
     el('gRateBar').style.width = Math.min(100, demand ? (m.perMin / demand) * 100 : 0) + '%';
     el('gTaktBar').style.width = Math.min(100, m.takt ? (m.tauBn / m.takt) * 100 : 0) + '%';
-    el('gWipBar').style.width = Math.min(100, m.n ? (m.wip / (m.n * (BUFFER + 1))) * 100 : 0) + '%';
+    el('gWipBar').style.width = Math.min(100, (m.wip / maxWip) * 100) + '%';
     el('gDownBar').style.width = Math.min(100, m.oee * 100) + '%';
-    el('gTaktCard').classList.toggle('is-down', m.overTakt || m.down);
-    el('gDownCard').classList.toggle('is-down', m.down || m.oee < 0.5);
+    el('gTaktCard').classList.toggle('is-down', m.overTakt || m.down || m.andon);
+    el('gDownCard').classList.toggle('is-down', m.down || m.andon || m.oee < 0.5);
     if (view) {
         const open = view.duty.orders.filter(o => o.state === 'OPEN').length;
+        const modeTag = params.pull ? ('PULL ' + params.kanban) : 'PUSH';
         el('topMeta').textContent = view.geom.site
             + '  ·  Day ' + pad(params.day, 3)
-            + '  ·  ' + pad(open, 2) + ' Open'
+            + '  ·  ' + modeTag
             + '  ·  ' + fmtRate(m.perMin) + '/min'
-            + '  ·  OEE ' + pad(Math.round(m.oee * 100), 2);
+            + '  ·  OEE ' + pad(Math.round(m.oee * 100), 2)
+            + '  ·  ' + pad(open, 2) + ' Open';
     }
 }
 
 function stationX(i, n) {
     const x0 = 96, x1 = 1864;
     return x0 + (i + 0.5) * ((x1 - x0) / Math.max(1, n));
+}
+
+function activeRobotStation(gates, mtr) {
+    if (!gates.length) return null;
+    if (inspectCell != null) {
+        const picked = gates.find(s => s.rm.n === inspectCell);
+        if (picked) return picked;
+    }
+    const stopped = gates.find(s => {
+        const m = lineState.machines.get(s.rm.n);
+        return m && (m.down || m.mode === 'andon');
+    });
+    if (stopped) return stopped;
+    if (mtr.constraint && mtr.constraint.st) return mtr.constraint.st;
+    const robots = gates.filter(s => (CELL_TASK[s.rm.program] || {}).robot);
+    return robots[0] || gates[0];
+}
+
+function drawSkuPart(x, y, sz, sku, accent) {
+    const half = sz / 2;
+    const rx = Math.round(x - half);
+    const ry = Math.round(y - half);
+    const col = accent ? ACCENT : INK;
+    if (sku === 'B') {
+        ctx.fillStyle = PAPER;
+        ctx.fillRect(rx, ry, sz, sz);
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(rx + 1, ry + 1, sz - 2, sz - 2);
+        ctx.fillStyle = col;
+        ctx.fillRect(rx + 5, ry + 5, sz - 10, sz - 10);
+    } else if (sku === 'C') {
+        ctx.fillStyle = PAPER;
+        ctx.fillRect(rx, ry, sz, sz);
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.moveTo(rx, ry + sz);
+        ctx.lineTo(rx + sz, ry);
+        ctx.lineTo(rx + sz, ry + sz);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(rx + 0.5, ry + 0.5, sz - 1, sz - 1);
+    } else {
+        ctx.fillStyle = col;
+        ctx.fillRect(rx, ry, sz, sz);
+    }
+}
+
+function drawMiniRobot(x, baseY, q, accent) {
+    const l1 = 24, l2 = 22, l3 = 8;
+    const a1 = q[1] - Math.PI / 2;
+    const a2 = q[1] + q[2] - Math.PI / 2;
+    const j2x = x - 14, j2y = baseY - 12;
+    const j3x = j2x + Math.cos(a1) * l1;
+    const j3y = j2y + Math.sin(a1) * l1;
+    const wX = j3x + Math.cos(a2) * l2;
+    const wY = j3y + Math.sin(a2) * l2;
+    const col = accent ? ACCENT : INK;
+    ctx.strokeStyle = col;
+    ctx.fillStyle = PAPER;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(j2x - 7, baseY);
+    ctx.lineTo(j2x + 7, baseY);
+    ctx.moveTo(j2x, baseY);
+    ctx.lineTo(j2x, j2y);
+    ctx.lineTo(j3x, j3y);
+    ctx.lineTo(wX, wY);
+    ctx.lineTo(wX, wY + l3);
+    ctx.stroke();
+    [[j2x, j2y, 3], [j3x, j3y, 2.5], [wX, wY, 2]].forEach(([px, py, r]) => {
+        ctx.beginPath();
+        ctx.arc(px, py, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+    });
 }
 
 function drawLineBoard(geom, duty, t) {
@@ -1430,19 +1826,26 @@ function drawLineBoard(geom, duty, t) {
     const stations = lineState.stations;
     const gates = stations.filter(s => s.gate);
     const n = Math.max(1, gates.length);
-    const beltY = 268;
+    const mtr = lineMetrics();
+    const focusSt = activeRobotStation(gates, mtr);
+    const beltY = 242;
+    const bufCap = params.pull ? 1 : 2;
     const flow = lineState.good || 0;
 
     ctx.fillStyle = INK;
     ctx.font = '600 18px ' + SANS;
     ctx.letterSpacing = '6px';
     ctx.textAlign = 'left';
-    ctx.fillText('PROCESS LINE', 96, 78);
+    ctx.fillText('PROCESS LINE', 96, 74);
     ctx.letterSpacing = '0px';
     ctx.fillStyle = MUTE;
-    ctx.font = '400 16px ' + MONO;
+    ctx.font = '400 15px ' + MONO;
     ctx.textAlign = 'right';
-    ctx.fillText(geom.site.toUpperCase(), 1864, 76);
+    const leanTag = (params.pull ? ('PULL ' + params.kanban) : 'PUSH')
+        + '  ·  ' + (params.batch === 1 ? 'HEIJUNKA' : ('BATCH ' + params.batch))
+        + '  ·  SMED ' + params.smed + 'S'
+        + '  ·  ' + geom.site.toUpperCase();
+    ctx.fillText(leanTag, 1864, 72);
 
     ctx.strokeStyle = INK;
     ctx.lineWidth = 2;
@@ -1452,7 +1855,7 @@ function drawLineBoard(geom, duty, t) {
     ctx.beginPath();
     ctx.rect(100, beltY - 22, 1760, 44);
     ctx.clip();
-    ctx.strokeStyle = 'rgba(17,17,17,0.9)';
+    ctx.strokeStyle = 'rgba(17,17,17,0.85)';
     ctx.lineWidth = 2;
     ctx.setLineDash([14, 18]);
     ctx.lineDashOffset = -(flow * 22);
@@ -1464,71 +1867,124 @@ function drawLineBoard(geom, duty, t) {
     ctx.stroke();
     ctx.restore();
 
+    stationHits = [];
+    const colSpan = 1768 / n;
+
     gates.forEach((st, i) => {
         const x = stationX(i, n);
-        const bw = Math.max(18, Math.min(78, (1768 / n) - 14));
-        ctx.strokeStyle = INK;
-        ctx.lineWidth = 1.5;
+        const bw = Math.max(22, Math.min(82, colSpan - 18));
         const m = lineState.machines.get(st.rm.n);
-        ctx.strokeRect(x - bw / 2 + 0.5, 168.5, bw, 10);
         const mode = m ? m.mode : 'starve';
-        let fill = 0;
-        if (mode === 'down') fill = 1;
-        else if (mode === 'block') fill = 1;
-        else if (mode === 'run' && m.tau) fill = Math.max(0, Math.min(1, 1 - m.remain / m.tau));
-        ctx.fillStyle = mode === 'down' ? ACCENT : INK;
-        if (fill > 0) ctx.fillRect(x - bw / 2 + 0.5, 168.5, Math.max(0, bw * fill), 10);
-        ctx.beginPath();
-        ctx.moveTo(x, 188);
-        ctx.lineTo(x, beltY - 26);
-        ctx.moveTo(x, beltY + 26);
-        ctx.lineTo(x, beltY + 48);
-        ctx.stroke();
+        const isAlert = mode === 'down' || mode === 'andon';
+        const isFocus = focusSt && focusSt.rm.n === st.rm.n;
+        const task = CELL_TASK[st.rm.program] || CELL_TASK.ROBOT;
+
+        stationHits.push({ x0: x - colSpan / 2, x1: x + colSpan / 2, y0: 94, y1: 332, roomN: st.rm.n });
 
         if (params.showNames) {
-            ctx.fillStyle = st.down ? ACCENT : INK;
-            ctx.font = (n > 14 ? '600 12px ' : '600 15px ') + SANS;
+            ctx.fillStyle = isAlert ? ACCENT : INK;
+            ctx.font = (n > 13 ? '600 12px ' : '600 15px ') + SANS;
             ctx.textAlign = 'center';
             ctx.letterSpacing = n > 12 ? '0.5px' : '2px';
-            ctx.fillText(st.rm.program, x, 148);
+            ctx.fillText(st.rm.program, x, 114);
             ctx.letterSpacing = '0px';
         }
-        ctx.fillStyle = MUTE;
+
+        ctx.strokeStyle = isAlert ? ACCENT : INK;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x - bw / 2 + 0.5, 124.5, bw, 8);
+        let fill = 0;
+        if (mode === 'down' || mode === 'andon' || mode === 'block') fill = 1;
+        else if (mode === 'run' || mode === 'setup') fill = Math.max(0, Math.min(1, m.u));
+        if (fill > 0) {
+            ctx.fillStyle = isAlert ? ACCENT : (mode === 'setup' ? 'rgba(17,17,17,0.38)' : INK);
+            ctx.fillRect(x - bw / 2 + 0.5, 124.5, Math.max(0, bw * fill), 8);
+        }
+
+        if (task.robot) {
+            const pose = sampleCellPose(st.rm.program, m, m ? m.u : 0);
+            const q = ik6(pose.pos, pose.pitch, pose.yaw, pose.roll);
+            drawMiniRobot(x, 200, q, isAlert);
+        } else {
+            ctx.strokeStyle = isAlert ? ACCENT : INK;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(x, 142);
+            ctx.lineTo(x, beltY - 26);
+            ctx.stroke();
+        }
+
+        ctx.strokeStyle = isAlert ? ACCENT : INK;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(x, beltY + 26);
+        ctx.lineTo(x, beltY + 42);
+        ctx.stroke();
+
+        ctx.fillStyle = isFocus ? INK : MUTE;
         ctx.font = '700 14px ' + MONO;
         ctx.textAlign = 'center';
-        ctx.fillText(pad(i + 1, 2), x, beltY + 72);
-        if (st.down) {
+        ctx.fillText(pad(i + 1, 2), x, beltY + 59);
+
+        if (isAlert) {
             ctx.fillStyle = ACCENT;
-            ctx.fillRect(x - 8, beltY + 84, 16, 16);
+            ctx.fillRect(x - 7, beltY + 68, 14, 14);
+        } else if (mode === 'setup') {
+            ctx.strokeStyle = INK;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x, beltY + 67);
+            ctx.lineTo(x + 7, beltY + 75);
+            ctx.lineTo(x, beltY + 83);
+            ctx.lineTo(x - 7, beltY + 75);
+            ctx.closePath();
+            ctx.stroke();
         } else if (st.crew) {
             ctx.strokeStyle = INK;
             ctx.lineWidth = 2;
-            ctx.strokeRect(x - 8.5, beltY + 83.5, 16, 16);
+            ctx.strokeRect(x - 7.5, beltY + 68.5, 14, 14);
         } else if (st.pm) {
             ctx.strokeStyle = INK;
             ctx.lineWidth = 1.5;
             ctx.beginPath();
-            ctx.moveTo(x, beltY + 84);
-            ctx.lineTo(x, beltY + 100);
-            ctx.moveTo(x - 8, beltY + 92);
-            ctx.lineTo(x + 8, beltY + 92);
+            ctx.moveTo(x, beltY + 68);
+            ctx.lineTo(x, beltY + 82);
+            ctx.moveTo(x - 7, beltY + 75);
+            ctx.lineTo(x + 7, beltY + 75);
+            ctx.stroke();
+        }
+
+        if (isFocus) {
+            ctx.strokeStyle = isAlert ? ACCENT : INK;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x - 20, 326);
+            ctx.lineTo(x - 20, 331);
+            ctx.lineTo(x + 20, 331);
+            ctx.lineTo(x + 20, 326);
             ctx.stroke();
         }
     });
 
+    /* Supermarket queue slots and SKU-coded parts on the belt. */
     gates.forEach((st, i) => {
         const m = lineState.machines.get(st.rm.n);
         if (!m) return;
         const x = stationX(i, n);
+        for (let k = 0; k < bufCap; k++) {
+            const qx = x - 34 - k * 20;
+            if (qx < 104) continue;
+            ctx.strokeStyle = 'rgba(17,17,17,0.22)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(Math.round(qx - 9) + 0.5, beltY - 9.5, 18, 18);
+        }
         if (m.busy) {
-            ctx.fillStyle = m.mode === 'down' ? ACCENT : INK;
-            ctx.fillRect(Math.round(x - 12), beltY - 12, 24, 24);
+            drawSkuPart(x, beltY, 22, m.busy.sku, m.mode === 'down' || m.mode === 'andon');
         }
         m.queue.forEach((part, k) => {
-            const qx = x - 36 - k * 20;
-            if (qx < 40) return;
-            ctx.fillStyle = INK;
-            ctx.fillRect(Math.round(qx - 10), beltY - 10, 20, 20);
+            const qx = x - 34 - k * 20;
+            if (qx < 104) return;
+            drawSkuPart(qx, beltY, 18, part.sku, false);
         });
         if (lineState.marks.some(mark => mark.i === i)) {
             ctx.strokeStyle = ACCENT;
@@ -1537,22 +1993,68 @@ function drawLineBoard(geom, duty, t) {
         }
     });
 
-    drawFigures(t);
-    drawTrace(t);
-    drawColumns(t);
-    drawBand(geom, duty);
+    /* CONWIP pull signal return loop from PACK back to DOCK. */
+    if (params.pull) {
+        const yLoop = 348;
+        const xStart = stationX(n - 1, n);
+        const xEnd = stationX(0, n);
+        ctx.strokeStyle = 'rgba(17,17,17,0.38)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([8, 8]);
+        ctx.beginPath();
+        ctx.moveTo(xStart, yLoop);
+        ctx.lineTo(xEnd, yLoop);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.strokeStyle = INK;
+        ctx.beginPath();
+        ctx.moveTo(xEnd + 10, yLoop - 5);
+        ctx.lineTo(xEnd, yLoop);
+        ctx.lineTo(xEnd + 10, yLoop + 5);
+        ctx.stroke();
+        const freeCards = Math.max(0, params.kanban - mtr.wip);
+        const cardsToShow = Math.min(params.kanban, 24);
+        for (let k = 0; k < cardsToShow; k++) {
+            const cx = xEnd + 24 + k * 14;
+            if (cx > xStart - 240) break;
+            if (k < mtr.wip) {
+                ctx.fillStyle = INK;
+                ctx.fillRect(cx, yLoop - 4, 8, 8);
+            } else {
+                ctx.fillStyle = PAPER;
+                ctx.fillRect(cx, yLoop - 4, 8, 8);
+                ctx.strokeStyle = INK;
+                ctx.lineWidth = 1;
+                ctx.strokeRect(cx + 0.5, yLoop - 3.5, 7, 7);
+            }
+        }
+        const label = 'CONWIP  ' + pad(mtr.wip, 2) + '/' + pad(params.kanban, 2) + '  (' + freeCards + ' FREE)';
+        ctx.font = '400 13px ' + MONO;
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = PAPER;
+        ctx.fillRect(xStart - tw - 22, yLoop - 9, tw + 20, 18);
+        ctx.fillStyle = MUTE;
+        ctx.textAlign = 'right';
+        ctx.fillText(label, xStart - 10, yLoop + 4);
+    }
+
+    drawFigures(mtr);
+    drawRobotBay(focusSt, mtr);
+    drawYamazumi(gates, mtr);
+    drawFlowTrace(mtr);
+    drawBand(geom, duty, mtr);
 }
 
-function drawFigures(t) {
-    const m = lineMetrics();
+function drawFigures(m) {
     const demand = 60 / Math.max(0.1, m.takt);
+    const maxWip = params.pull ? Math.max(1, params.kanban) : Math.max(1, m.n * 3);
     const cards = [
-        ['01  RATE', fmtRate(m.perMin), '/ MIN', Math.min(1, demand ? m.perMin / demand : 0), m.down],
-        ['02  TAKT', m.takt.toFixed(1), m.missed ? ('MISS ' + m.missed) : 'SEC', Math.min(1, m.takt ? m.tauBn / m.takt : 0), m.overTakt || m.down],
-        ['03  WIP', pad(m.wip, 2), m.little > 0.05 ? ('L ' + m.little.toFixed(1)) : 'ON LINE', Math.min(1, m.n ? m.wip / (m.n * (BUFFER + 1)) : 0), false],
-        ['04  OEE', pad(Math.round(m.oee * 100), 2), m.block, m.oee, m.down || m.oee < 0.5],
+        ['01  RATE', fmtRate(m.perMin), '/ MIN  ·  CAP ' + fmtRate(m.capMin), Math.min(1, demand ? m.perMin / demand : 0), m.down || m.andon],
+        ['02  TAKT', m.takt.toFixed(1), m.missed ? ('MISS ' + m.missed) : (params.pull ? ('CONWIP ' + m.wip + '/' + params.kanban) : 'SEC'), Math.min(1, m.takt ? m.tauBn / m.takt : 0), m.overTakt || m.down || m.andon],
+        ['03  WIP', pad(m.wip, 2), (m.little > 0.05 ? ('L ' + m.little.toFixed(1)) : 'ON LINE') + '  ·  W0 ' + m.w0.toFixed(1), Math.min(1, m.wip / maxWip), false],
+        ['04  OEE', pad(Math.round(m.oee * 100), 2), m.block + (m.down ? ' · E-STOP' : (m.andon ? ' · ANDON' : (' · VA ' + Math.round(m.vaRatio * 100) + '%'))), m.oee, m.down || m.andon || m.oee < 0.5],
     ];
-    const y = 470;
+    const y = 374;
     ctx.strokeStyle = INK;
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -1565,276 +2067,500 @@ function drawFigures(t) {
             ctx.strokeStyle = 'rgba(17,17,17,0.18)';
             ctx.lineWidth = 1.5;
             ctx.beginPath();
-            ctx.moveTo(x - 24, y + 28);
-            ctx.lineTo(x - 24, y + 168);
+            ctx.moveTo(x - 24, y + 20);
+            ctx.lineTo(x - 24, y + 148);
             ctx.stroke();
         }
         ctx.fillStyle = MUTE;
-        ctx.font = '600 16px ' + SANS;
+        ctx.font = '600 15px ' + SANS;
         ctx.textAlign = 'left';
         ctx.letterSpacing = '3px';
-        ctx.fillText(c[0], x, y + 48);
+        ctx.fillText(c[0], x, y + 40);
         ctx.letterSpacing = '0px';
         ctx.fillStyle = c[4] ? ACCENT : INK;
-        ctx.font = '700 64px ' + MONO;
-        ctx.fillText(c[1], x, y + 124);
+        ctx.font = '700 58px ' + MONO;
+        ctx.fillText(c[1], x, y + 106);
         ctx.fillStyle = MUTE;
-        ctx.font = '400 16px ' + MONO;
-        ctx.fillText(c[2], x, y + 156);
+        ctx.font = '400 15px ' + MONO;
+        ctx.fillText(c[2], x, y + 134);
         const bw = 280;
         ctx.fillStyle = 'rgba(17,17,17,0.12)';
-        ctx.fillRect(x, y + 176, bw, 4);
+        ctx.fillRect(x, y + 148, bw, 4);
         ctx.fillStyle = c[4] ? ACCENT : INK;
-        ctx.fillRect(x, y + 176, Math.max(0, bw * c[3]), 4);
+        ctx.fillRect(x, y + 148, Math.max(0, bw * c[3]), 4);
     });
 }
 
-function drawTrace(t) {
-    const y = 720;
-    const x0 = 96;
-    const x1 = 1864;
-    const h = 130;
+function drawRobotBay(st, mtr) {
+    const topY = 552;
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(96, topY);
+    ctx.lineTo(1864, topY);
+    ctx.moveTo(954, topY);
+    ctx.lineTo(954, 1026);
+    ctx.stroke();
+
+    if (!st) return;
+    const m = lineState.machines.get(st.rm.n);
+    const tel = robotCellTelemetry(st, m);
+    const col = tel.down ? ACCENT : INK;
+
     ctx.fillStyle = INK;
     ctx.font = '600 16px ' + SANS;
     ctx.textAlign = 'left';
     ctx.letterSpacing = '3px';
-    ctx.fillText('GOOD OUTPUT', x0, y);
+    ctx.fillText('6-AXIS CELL', 96, 580);
     ctx.letterSpacing = '0px';
+    ctx.fillStyle = MUTE;
+    ctx.font = '400 15px ' + MONO;
+    ctx.fillText(tel.prog + '  ·  ' + tel.eoat + '  ·  SKU ' + tel.sku, 242, 580);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = tel.down ? ACCENT : (tel.phase === 'SMED SWAP' ? INK : MUTE);
+    ctx.font = '700 15px ' + MONO;
+    ctx.fillText(tel.phase + (tel.degraded ? ' · DERATE' : ''), 930, 580);
+
+    /* ---- Side Elevation (R-Z plane) ---- */
+    const ex = 96, ey = 598, ew = 460, eh = 268;
     ctx.strokeStyle = INK;
     ctx.lineWidth = 1.5;
-    ctx.strokeRect(x0 + 0.5, y + 18.5, x1 - x0, h);
-    const trace = lineState ? lineState.trace : [];
-    const max = Math.max(2, ...trace, 1);
+    ctx.strokeRect(ex + 0.5, ey + 0.5, ew, eh);
+
+    ctx.save();
     ctx.beginPath();
-    ctx.moveTo(x0, y + 18 + h);
-    trace.forEach((v, i) => {
-        const x = x0 + ((i + 1) / 64) * (x1 - x0);
-        const py = y + 18 + h - (v / max) * (h - 16);
-        if (i === 0) ctx.lineTo(x, py);
-        else ctx.lineTo(x, py);
+    ctx.rect(ex + 1, ey + 1, ew - 2, eh - 2);
+    ctx.clip();
+
+    const ox = ex + 64, oy = ey + eh - 30;
+    const sc = 0.165;
+    const projRZ = p => [ox + Math.hypot(p[0], p[1]) * sc, oy - p[2] * sc];
+
+    /* Floor datum and reach envelope */
+    ctx.strokeStyle = 'rgba(17,17,17,0.16)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(ex + 12, oy);
+    ctx.lineTo(ex + ew - 12, oy);
+    ctx.stroke();
+    ctx.setLineDash([5, 6]);
+    ctx.beginPath();
+    const reachR = (ROBOT_DH.A1 + ROBOT_DH.A2 + ROBOT_DH.D4) * sc;
+    ctx.arc(ox, oy - ROBOT_DH.D1 * sc, reachR, -Math.PI * 0.52, 0.2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    /* Fixture table + workpiece */
+    const fx0 = ox + 840 * sc, fx1 = ox + 1240 * sc, fy = oy - 470 * sc;
+    ctx.strokeStyle = 'rgba(17,17,17,0.45)';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(fx0, fy, fx1 - fx0, oy - fy);
+    ctx.fillStyle = 'rgba(17,17,17,0.08)';
+    ctx.fillRect(fx0 + 14, fy - 18, (fx1 - fx0) - 28, 18);
+    ctx.strokeRect(fx0 + 14, fy - 18, (fx1 - fx0) - 28, 18);
+
+    /* Process path trail projected to R-Z */
+    ctx.strokeStyle = 'rgba(17,17,17,0.32)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    tel.trail.forEach((pt, idx) => {
+        const [px, py] = projRZ(pt);
+        if (idx === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
     });
-    if (trace.length) {
-        const last = trace[trace.length - 1];
-        const lx = x0 + (trace.length / 64) * (x1 - x0);
-        const ly = y + 18 + h - (last / max) * (h - 16);
-        ctx.lineTo(lx, y + 18 + h);
-    }
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(17,17,17,0.06)';
-    ctx.fill();
-    ctx.strokeStyle = INK;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    /* Articulated 6-axis links in Elevation */
+    const b0 = projRZ(tel.fk.p0);
+    const b1 = projRZ(tel.fk.p1);
+    const j2 = projRZ(tel.fk.p2);
+    const j3 = projRZ(tel.fk.p3);
+    const jw = projRZ(tel.fk.pw);
+    const tc = projRZ(tel.fk.tcp);
+
+    /* Pedestal + turret */
+    ctx.fillStyle = col;
+    ctx.fillRect(b0[0] - 18, b0[1] - 10, 36, 10);
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(b0[0] - 12, b1[1], 24, b0[1] - b1[1] - 10);
+
+    /* Upper arm, forearm, wrist, EOAT */
+    ctx.lineWidth = 7;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(j2[0], j2[1]);
+    ctx.lineTo(j3[0], j3[1]);
+    ctx.stroke();
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(j3[0], j3[1]);
+    ctx.lineTo(jw[0], jw[1]);
+    ctx.stroke();
     ctx.lineWidth = 2.5;
+    ctx.lineCap = 'butt';
     ctx.beginPath();
-    trace.forEach((v, i) => {
-        const x = x0 + ((i + 1) / 64) * (x1 - x0);
-        const py = y + 18 + h - (v / max) * (h - 16);
-        if (i === 0) ctx.moveTo(x, py);
-        else ctx.lineTo(x, py);
-    });
+    ctx.moveTo(jw[0], jw[1]);
+    ctx.lineTo(tc[0], tc[1]);
     ctx.stroke();
-}
 
-function drawColumns() {
-    const mtr = lineMetrics();
-    const gates = lineState ? lineState.stations.filter(s => s.gate) : [];
-    const n = gates.length || 1;
-    const y = 900;
-    const h = 110;
-    const scale = Math.max(mtr.takt * 2.6, 1);
-    ctx.fillStyle = INK;
-    ctx.font = '600 16px ' + SANS;
-    ctx.textAlign = 'left';
-    ctx.letterSpacing = '3px';
-    ctx.fillText('BALANCE', 96, y);
-    ctx.letterSpacing = '0px';
-    const taktY = y + 16 + h - (mtr.takt / scale) * h;
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(168, taktY);
-    ctx.lineTo(1864, taktY);
-    ctx.stroke();
+    /* Joint bearings (J2, J3, J4/J5) */
+    [[j2, 7], [j3, 6], [jw, 4.5]].forEach(([pt, rad]) => {
+        ctx.fillStyle = PAPER;
+        ctx.beginPath();
+        ctx.arc(pt[0], pt[1], rad, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    });
+
+    /* TCP reticle */
+    ctx.fillStyle = tel.phase === 'PROCESS' ? ACCENT : col;
+    ctx.fillRect(Math.round(tc[0] - 4), Math.round(tc[1] - 4), 8, 8);
+    if (tel.phase === 'PROCESS') {
+        ctx.strokeStyle = ACCENT;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(Math.round(tc[0] - 9) + 0.5, Math.round(tc[1] - 9) + 0.5, 18, 18);
+    }
+
     ctx.fillStyle = MUTE;
     ctx.font = '400 13px ' + MONO;
     ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('TAKT', 96, taktY);
-    ctx.textBaseline = 'alphabetic';
-    gates.forEach((st, i) => {
-        const machine = lineState.machines.get(st.rm.n);
-        const tau = machine ? machine.tau : processTime(st);
-        const x = stationX(i, n);
-        const bw = Math.max(10, Math.min(36, (1768 / n) - 10));
-        const colH = Math.min(h, Math.max(8, (tau / scale) * h));
-        const top = y + 16 + h - colH;
-        ctx.strokeStyle = INK;
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(x - bw / 2 + 0.5, top + 0.5, bw, colH);
-        const mode = machine ? machine.mode : 'starve';
-        let fill = 0;
-        if (mode === 'down' || mode === 'block') fill = 1;
-        else if (mode === 'run' && machine.tau) fill = Math.max(0, Math.min(1, 1 - machine.remain / machine.tau));
-        if (fill > 0) {
-            ctx.fillStyle = mode === 'down' ? ACCENT : INK;
-            const fh = colH * fill;
-            ctx.fillRect(x - bw / 2 + 1, top + colH - fh, bw - 2, fh);
-        }
+    const tcp = tel.fk.tcp;
+    ctx.fillText('ELEV R-Z  ·  TCP ' + Math.round(tcp[0]) + ', ' + Math.round(tcp[1]) + ', ' + Math.round(tcp[2]) + ' mm', ex + 12, ey + eh - 10);
+    ctx.restore();
+
+    /* ---- Top Plan View (X-Y plane) ---- */
+    const px0 = 574, py0 = 598, pw = 356, ph = 268;
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(px0 + 0.5, py0 + 0.5, pw, ph);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(px0 + 1, py0 + 1, pw - 2, ph - 2);
+    ctx.clip();
+
+    const pcx = px0 + 68, pcy = py0 + ph / 2 - 4;
+    const psc = 0.175;
+    const projXY = p => [pcx + p[0] * psc, pcy - p[1] * psc];
+
+    /* Safety light curtain perimeter */
+    ctx.strokeStyle = tel.down ? ACCENT : 'rgba(17,17,17,0.22)';
+    ctx.lineWidth = tel.down ? 2 : 1;
+    ctx.setLineDash([6, 6]);
+    ctx.strokeRect(px0 + 12.5, py0 + 12.5, pw - 25, ph - 40);
+    ctx.setLineDash([]);
+
+    /* Conveyor pass-through and workpiece footprint */
+    const convX = pcx + 1040 * psc;
+    ctx.strokeStyle = 'rgba(17,17,17,0.22)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(convX - 36, py0 + 14);
+    ctx.lineTo(convX - 36, py0 + ph - 28);
+    ctx.moveTo(convX + 36, py0 + 14);
+    ctx.lineTo(convX + 36, py0 + ph - 28);
+    ctx.stroke();
+
+    /* SMED tool-changer dock rack */
+    const rack = projXY([690, -470, 0]);
+    ctx.strokeStyle = 'rgba(17,17,17,0.45)';
+    ctx.strokeRect(rack[0] - 10, rack[1] - 7, 20, 14);
+
+    /* J1 waist sweep arc */
+    ctx.strokeStyle = 'rgba(17,17,17,0.22)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(pcx, pcy, 44, -Math.PI * 0.65, Math.PI * 0.65);
+    ctx.stroke();
+
+    /* Process path projected to X-Y */
+    ctx.strokeStyle = 'rgba(17,17,17,0.32)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    tel.trail.forEach((pt, idx) => {
+        const [x, y] = projXY(pt);
+        if (idx === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
     });
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    /* Top-down arm links */
+    const q0 = projXY(tel.fk.p0);
+    const q2 = projXY(tel.fk.p2);
+    const q3 = projXY(tel.fk.p3);
+    const qw = projXY(tel.fk.pw);
+    const qt = projXY(tel.fk.tcp);
+
+    ctx.strokeStyle = col;
+    ctx.fillStyle = PAPER;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(q0[0], q0[1], 16, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(q0[0], q0[1]);
+    ctx.lineTo(q2[0], q2[1]);
+    ctx.lineTo(q3[0], q3[1]);
+    ctx.stroke();
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.moveTo(q3[0], q3[1]);
+    ctx.lineTo(qw[0], qw[1]);
+    ctx.stroke();
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    ctx.moveTo(qw[0], qw[1]);
+    ctx.lineTo(qt[0], qt[1]);
+    ctx.stroke();
+
+    ctx.fillStyle = tel.phase === 'PROCESS' ? ACCENT : col;
+    ctx.fillRect(Math.round(qt[0] - 4), Math.round(qt[1] - 4), 8, 8);
+
+    ctx.fillStyle = MUTE;
+    ctx.font = '400 13px ' + MONO;
+    ctx.textAlign = 'left';
+    ctx.fillText('PLAN X-Y  ·  μ ' + tel.mu.toFixed(2) + (tel.mu < 0.18 ? ' SINGULAR' : ' CLEAR'), px0 + 12, py0 + ph - 10);
+    ctx.restore();
+
+    /* ---- 6-Axis Joint Telemetry Strip (J1..J6) ---- */
+    const jy = 884;
+    const jwCol = 834 / 6;
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(96, jy);
+    ctx.lineTo(930, jy);
+    ctx.stroke();
+
+    for (let j = 0; j < 6; j++) {
+        const spec = JOINT_SPEC[j];
+        const x = 96 + j * jwCol;
+        if (j) {
+            ctx.strokeStyle = 'rgba(17,17,17,0.14)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x, jy + 10);
+            ctx.lineTo(x, 1022);
+            ctx.stroke();
+        }
+        const deg = tel.q[j] * 180 / Math.PI;
+        const wDeg = Math.abs(tel.dq[j] * 180 / Math.PI);
+        const wFrac = Math.min(1, wDeg / spec.wMax);
+        const trq = tel.torques[j];
+        const tFrac = Math.min(1, trq / spec.tMax);
+        const hot = tel.down || tFrac > 0.85 || (j === 4 && Math.abs(Math.sin(tel.q[4])) < 0.16);
+
+        ctx.textAlign = 'left';
+        ctx.fillStyle = hot ? ACCENT : INK;
+        ctx.font = '700 13px ' + MONO;
+        ctx.fillText(spec.id, x + 8, jy + 26);
+        ctx.fillStyle = MUTE;
+        ctx.font = '600 11px ' + SANS;
+        ctx.fillText(spec.role, x + 36, jy + 26);
+
+        const sign = deg >= 0 ? '+' : '−';
+        const degStr = sign + String(Math.round(Math.abs(deg))).padStart(3, '0') + '°';
+        ctx.fillStyle = hot ? ACCENT : INK;
+        ctx.font = '700 22px ' + MONO;
+        ctx.fillText(degStr, x + 8, jy + 60);
+
+        /* Joint velocity utilization track */
+        const bw = jwCol - 20;
+        ctx.fillStyle = 'rgba(17,17,17,0.12)';
+        ctx.fillRect(x + 8, jy + 74, bw, 4);
+        ctx.fillStyle = hot ? ACCENT : INK;
+        ctx.fillRect(x + 8, jy + 74, Math.max(0, bw * wFrac), 4);
+
+        ctx.fillStyle = MUTE;
+        ctx.font = '400 13px ' + MONO;
+        ctx.fillText(Math.round(trq) + ' Nm', x + 8, jy + 100);
+        ctx.fillText(Math.round(wDeg) + ' °/s', x + 8, jy + 120);
+    }
+}
+
+function drawYamazumi(gates, mtr) {
+    const x0 = 978, x1 = 1864, w = x1 - x0;
+    const y = 580;
+    const plotY = 602, plotH = 180;
+    const n = gates.length || 1;
+    const maxCol = Math.max(mtr.takt * 1.6, ...gates.map(st => expectedCycle(st).total), 1) * 1.15;
+
+    ctx.fillStyle = INK;
+    ctx.font = '600 16px ' + SANS;
+    ctx.textAlign = 'left';
+    ctx.letterSpacing = '3px';
+    ctx.fillText('YAMAZUMI', x0, y);
+    ctx.letterSpacing = '0px';
+
+    ctx.fillStyle = MUTE;
+    ctx.font = '400 14px ' + MONO;
+    ctx.textAlign = 'right';
+    ctx.fillText('VA · NVA · SMED   ·   VA RATIO ' + Math.round(mtr.vaRatio * 100) + '%', x1, y);
+
+    /* Plot frame bottom baseline */
+    ctx.strokeStyle = 'rgba(17,17,17,0.22)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x0, plotY + plotH);
+    ctx.lineTo(x1, plotY + plotH);
+    ctx.stroke();
+
+    /* Horizontal Takt line */
+    const taktY = plotY + plotH - (mtr.takt / maxCol) * plotH;
+    ctx.strokeStyle = mtr.overTakt ? ACCENT : INK;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x0 + 88, taktY);
+    ctx.lineTo(x1, taktY);
+    ctx.stroke();
+    ctx.fillStyle = mtr.overTakt ? ACCENT : MUTE;
+    ctx.font = '700 12px ' + MONO;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('TAKT ' + mtr.takt.toFixed(1) + 's', x0, taktY);
+    ctx.textBaseline = 'alphabetic';
+
+    const leftPad = 94;
+    const usable = w - leftPad;
+    const step = usable / n;
+    const bw = Math.max(14, Math.min(44, step - 12));
+
+    gates.forEach((st, i) => {
+        const brk = expectedCycle(st);
+        const m = lineState.machines.get(st.rm.n);
+        const isAlert = m && (m.mode === 'down' || m.mode === 'andon');
+        const cx = x0 + leftPad + (i + 0.5) * step;
+        const bx = Math.round(cx - bw / 2);
+
+        const hVa = (brk.va / maxCol) * plotH;
+        const hNva = (brk.nva / maxCol) * plotH;
+        const hSmed = (brk.smed / maxCol) * plotH;
+        const base = plotY + plotH;
+
+        /* VA slice (solid ink or accent on stop) */
+        ctx.fillStyle = isAlert ? ACCENT : INK;
+        ctx.fillRect(bx, base - hVa, bw, hVa);
+
+        /* NVA slice (diagonal hatch) */
+        const nvaTop = base - hVa - hNva;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(bx, nvaTop, bw, hNva);
+        ctx.clip();
+        ctx.strokeStyle = isAlert ? ACCENT : INK;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (let d = -hNva; d < bw + hNva; d += 7) {
+            ctx.moveTo(bx + d, nvaTop + hNva);
+            ctx.lineTo(bx + d + hNva, nvaTop);
+        }
+        ctx.stroke();
+        ctx.restore();
+        ctx.strokeStyle = isAlert ? ACCENT : INK;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(bx + 0.5, nvaTop + 0.5, bw - 1, hNva);
+
+        /* SMED / Wear slice (open cap) */
+        if (hSmed > 1.5) {
+            const smedTop = nvaTop - hSmed;
+            ctx.fillStyle = PAPER;
+            ctx.fillRect(bx, smedTop, bw, hSmed);
+            ctx.strokeStyle = (brk.total > mtr.takt + 0.05 || isAlert) ? ACCENT : INK;
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(bx + 0.5, smedTop + 0.5, bw - 1, hSmed);
+        }
+
+        /* Station short label */
+        ctx.fillStyle = isAlert ? ACCENT : MUTE;
+        ctx.font = '700 11px ' + MONO;
+        ctx.textAlign = 'center';
+        ctx.fillText(st.rm.program.slice(0, 6), cx, plotY + plotH + 18);
+    });
+}
+
+function drawFlowTrace(mtr) {
+    const x0 = 978, x1 = 1864, w = x1 - x0;
+    const y = 848;
+    const boxY = 866, h = 156;
+
+    ctx.fillStyle = INK;
+    ctx.font = '600 16px ' + SANS;
+    ctx.textAlign = 'left';
+    ctx.letterSpacing = '3px';
+    ctx.fillText('FLOW TRACE', x0, y);
+    ctx.letterSpacing = '0px';
+
+    ctx.fillStyle = MUTE;
+    ctx.font = '400 14px ' + MONO;
+    ctx.textAlign = 'right';
+    ctx.fillText('CT ' + Math.round(mtr.ct) + 's  ·  FPY ' + Math.round(mtr.Q * 100) + '%  ·  W0 ' + mtr.w0.toFixed(1), x1, y);
+
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(x0 + 0.5, boxY + 0.5, w, h);
+
+    const trace = lineState ? lineState.rateTrace : [];
+    const cap = mtr.capMin || 1;
+    const maxV = Math.max(cap * 1.45, ...trace.map(p => p.rate), 2);
+
+    /* Bottleneck capacity reference line */
+    const capY = boxY + h - (cap / maxV) * (h - 24) - 8;
+    ctx.strokeStyle = 'rgba(17,17,17,0.32)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 6]);
+    ctx.beginPath();
+    ctx.moveTo(x0 + 2, capY);
+    ctx.lineTo(x1 - 2, capY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = MUTE;
+    ctx.font = '400 12px ' + MONO;
+    ctx.textAlign = 'left';
+    ctx.fillText('CAP ' + fmtRate(cap) + '/m', x0 + 10, capY - 6);
+
+    if (!trace.length) return;
+    const pts = trace.map((pt, i) => {
+        const px = x0 + (i / Math.max(1, trace.length - 1)) * w;
+        const py = boxY + h - (pt.rate / maxV) * (h - 24) - 8;
+        return [px, py];
+    });
+
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], boxY + h - 1);
+    pts.forEach(([px, py]) => ctx.lineTo(px, py));
+    ctx.lineTo(pts[pts.length - 1][0], boxY + h - 1);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(17,17,17,0.06)';
+    ctx.fill();
+
+    ctx.strokeStyle = (mtr.down || mtr.andon) ? ACCENT : INK;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    pts.forEach(([px, py], i) => {
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
 }
 
 function drawSheet(geom, duty, t) {
     drawLineBoard(geom, duty, t);
 }
 
-/* A paper plate behind the name, so a riser never strikes the type. */
-function plateText(text, x, y, font, align) {
-    ctx.font = font;
-    ctx.letterSpacing = '0px';
-    const w = ctx.measureText(text).width + 18;
-    const left = align === 'left' ? x - 6 : x - w / 2 - 8;
-    ctx.fillStyle = PAPER;
-    ctx.fillRect(left, y - 14, w + 16, 28);
-}
-
-function drawLabel(rm) {
-    const cx = rm.x + rm.w / 2;
-    const cy = rm.y + rm.h / 2;
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(rm.x + 8, rm.y + 8, Math.max(0, rm.w - 16), Math.max(0, rm.h - 16));
-    ctx.clip();
-    ctx.fillStyle = INK;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    if (rm.program === 'AISLE') {
-        const verticalHall = rm.h > rm.w;
-        ctx.font = '700 20px ' + MONO;
-        ctx.letterSpacing = '1px';
-        if (verticalHall) {
-            ctx.translate(rm.x + 28, rm.y + 36);
-            ctx.rotate(-Math.PI / 2);
-            ctx.textAlign = 'right';
-        } else {
-            ctx.textAlign = 'left';
-            ctx.translate(rm.x + 18, cy);
-        }
-        plateText(pad(rm.n, 2), 0, params.showNames ? -12 : 0, '700 20px ' + MONO, 'left');
-        ctx.fillStyle = INK;
-        ctx.font = '700 20px ' + MONO;
-        ctx.letterSpacing = '1px';
-        ctx.fillText(pad(rm.n, 2), 0, params.showNames ? -12 : 0);
-        if (params.showNames) {
-            plateText('AISLE', 0, 14, '600 15px ' + SANS, 'left');
-            ctx.fillStyle = INK;
-            ctx.font = '600 15px ' + SANS;
-            ctx.letterSpacing = '3.5px';
-            ctx.fillText('AISLE', 0, 14);
-        }
-        ctx.restore();
-        return;
-    }
-
-    const rotate = rm.h > rm.w * 1.8 && rm.w < 220;
-    if (rotate) {
-        ctx.translate(cx, cy);
-        ctx.rotate(-Math.PI / 2);
-        ctx.font = '700 20px ' + MONO;
-        ctx.letterSpacing = '1px';
-        plateText(pad(rm.n, 2), 0, params.showNames ? -14 : 0, '700 20px ' + MONO, 'center');
-        ctx.fillStyle = INK;
-        ctx.font = '700 20px ' + MONO;
-        ctx.letterSpacing = '1px';
-        ctx.fillText(pad(rm.n, 2), 0, params.showNames ? -14 : 0);
-        if (params.showNames) {
-            plateText(rm.program, 0, 14, '600 15px ' + SANS, 'center');
-            ctx.fillStyle = INK;
-            ctx.font = '600 15px ' + SANS;
-            ctx.letterSpacing = '3px';
-            ctx.fillText(rm.program, 0, 14);
-        }
-        ctx.restore();
-        return;
-    }
-
-    const named = params.showNames && rm.w >= 200 && rm.h >= 120;
-    plateText(pad(rm.n, 2), cx, named ? cy - 16 : cy, '700 22px ' + MONO, 'center');
-    ctx.fillStyle = INK;
-    ctx.font = '700 22px ' + MONO;
-    ctx.letterSpacing = '1px';
-    ctx.fillText(pad(rm.n, 2), cx, named ? cy - 16 : cy);
-    if (named) {
-        plateText(rm.program, cx, cy + 16, '600 16px ' + SANS, 'center');
-        ctx.fillStyle = INK;
-        ctx.font = '600 16px ' + SANS;
-        ctx.letterSpacing = '2.5px';
-        ctx.fillText(rm.program, cx, cy + 16);
-    }
-    ctx.restore();
-}
-
-function drawMarks(orders, t) {
-    const by = new Map();
-    for (const o of orders) {
-        if (!by.has(o.room.n)) by.set(o.room.n, []);
-        by.get(o.room.n).push(o);
-    }
-    const size = 22;
-    const gap = 8;
-    const rank = s => (s === 'OPEN' ? 0 : s === 'CREW' ? 1 : 2);
-    for (const list of by.values()) {
-        list.sort((a, b) => rank(a.state) - rank(b.state));
-        const rm = list[0].room;
-        const total = list.length * size + (list.length - 1) * gap;
-        let x = Math.round(rm.x + (rm.w - total) / 2);
-        let y = Math.round(rm.y + rm.h - size - 16);
-        x = Math.max(rm.x + 8, Math.min(x, rm.x + rm.w - size - 8));
-        y = Math.max(rm.y + 8, Math.min(y, rm.y + rm.h - size - 8));
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(rm.x + 2, rm.y + 2, rm.w - 4, rm.h - 4);
-        ctx.clip();
-        list.forEach((o, i) => {
-            const px = x + i * (size + gap);
-            if (px + size > rm.x + rm.w - 6) return;
-            stamp(o, px, y, size, t);
-        });
-        ctx.restore();
-    }
-}
-
-function stamp(o, x, y, size, t) {
-    if (o.state === 'OPEN') {
-        ctx.fillStyle = ACCENT;
-        ctx.fillRect(x, y, size, size);
-        const p = (Math.sin((t || 0) * 3.6 + o.room.n) + 1) / 2;
-        ctx.save();
-        ctx.strokeStyle = ACCENT;
-        ctx.globalAlpha = 0.9 * (1 - p);
-        ctx.lineWidth = 2;
-        const g = 3 + p * 16;
-        ctx.strokeRect(x - g + 0.5, y - g + 0.5, size + g * 2, size + g * 2);
-        ctx.restore();
-        return;
-    }
-    if (o.state === 'CREW') {
-        ctx.strokeStyle = INK;
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
-        return;
-    }
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 1.5;
-    const c = size / 2;
-    ctx.beginPath();
-    ctx.moveTo(x + c, y + 2);
-    ctx.lineTo(x + c, y + size - 2);
-    ctx.moveTo(x + 2, y + c);
-    ctx.lineTo(x + size - 2, y + c);
-    ctx.stroke();
-}
-
-function drawBand(geom, duty) {
+function drawBand(geom, duty, mtr) {
     const y = 1052;
     ctx.strokeStyle = INK;
     ctx.lineWidth = 2;
@@ -1860,7 +2586,7 @@ function drawBand(geom, duty) {
     ctx.fillText('N', 108, y + 118);
 
     const open = duty.orders.filter(o => o.state === 'OPEN').length;
-    const crew = duty.orders.filter(o => o.state === 'CREW').length;
+    const m = mtr || lineMetrics();
 
     ctx.textAlign = 'left';
     ctx.font = '700 28px ' + SANS;
@@ -1870,10 +2596,11 @@ function drawBand(geom, duty) {
     ctx.fillStyle = MUTE;
     ctx.font = '400 18px ' + MONO;
     ctx.letterSpacing = '0.5px';
-    const wip = lineMetrics().wip;
     const line = 'seed ' + params.seed
         + '   ·   day ' + pad(params.day, 3)
-        + '   ·   wip ' + pad(wip, 2)
+        + '   ·   ' + (params.pull ? ('pull ' + pad(params.kanban, 2)) : 'push')
+        + '   ·   va ' + pad(Math.round(m.vaRatio * 100), 2) + '%'
+        + '   ·   6-dof'
         + '   ·   open ' + pad(open, 2);
     ctx.fillText(line, 168, y + 108);
 
@@ -1910,6 +2637,10 @@ function syncReadouts() {
     el('horizonVal').textContent = params.horizon + ' d';
     el('occVal').textContent = Math.round(params.occupancy * 100) + '%';
     el('crewVal').textContent = pad(params.crew, 2);
+    el('kanbanVal').textContent = params.pull ? pad(params.kanban, 2) : 'PUSH';
+    el('kanbanCtl').disabled = !params.pull;
+    el('batchVal').textContent = params.batch === 1 ? '1 · level' : (params.batch + ' · batch');
+    el('smedVal').textContent = params.smed + ' s';
     el('placardSeed').textContent = String(params.seed);
 }
 
@@ -1959,7 +2690,9 @@ const STEP = 680;
 function signature() {
     return [
         params.seed, params.rooms, params.age, params.day, params.horizon,
-        params.occupancy, params.crew, params.service,
+        params.occupancy, params.crew,
+        params.pull ? 1 : 0, params.kanban, params.batch, params.smed, params.jidoka ? 1 : 0,
+        params.service,
         params.showPM ? 1 : 0, params.showNames ? 1 : 0,
     ].join(':');
 }
@@ -2028,6 +2761,7 @@ function applySeedFromInput() {
     params.seed = Number.isFinite(n) ? (Math.abs(n) >>> 0) : 0;
     el('seedInput').value = String(params.seed);
     focusKey = null;
+    inspectCell = null;
     paint();
 }
 
@@ -2041,11 +2775,26 @@ el('rerollBtn').addEventListener('click', () => {
     params.seed = Math.floor(Math.random() * 100000);
     el('seedInput').value = String(params.seed);
     focusKey = null;
+    inspectCell = null;
     paint();
 });
 
-['roomsCtl', 'ageCtl', 'dayCtl', 'horizonCtl', 'occCtl', 'crewCtl'].forEach(id => {
+['roomsCtl', 'ageCtl', 'dayCtl', 'horizonCtl', 'occCtl', 'crewCtl', 'kanbanCtl', 'batchCtl', 'smedCtl'].forEach(id => {
     el(id).addEventListener('input', () => { focusKey = null; paint(); });
+});
+
+['pullCtl', 'jidokaCtl', 'pmCtl', 'namesCtl'].forEach(id => {
+    el(id).addEventListener('change', paint);
+});
+
+canvas.addEventListener('click', e => {
+    const rect = canvas.getBoundingClientRect();
+    const cx = ((e.clientX - rect.left) / rect.width) * W;
+    const cy = ((e.clientY - rect.top) / rect.height) * H;
+    const hit = stationHits.find(h => cx >= h.x0 && cx <= h.x1 && cy >= h.y0 && cy <= h.y1);
+    if (!hit) return;
+    inspectCell = inspectCell === hit.roomN ? null : hit.roomN;
+    if (view) drawSheet(view.geom, view.duty, motion.t);
 });
 
 el('dayBack').addEventListener('click', () => setDay(params.day - 1));
@@ -2064,9 +2813,6 @@ el('svcGrid').addEventListener('click', e => {
     focusKey = null;
     paint();
 });
-
-el('pmCtl').addEventListener('change', paint);
-el('namesCtl').addEventListener('change', paint);
 
 el('register').addEventListener('click', e => {
     const row = e.target.closest('li[data-key]');
@@ -2089,6 +2835,8 @@ el('exportBtn').addEventListener('click', () => {
     cancelAnimationFrame(raf);
     const saved = lineState;
     const savedSig = plantSig;
+    const savedInspect = inspectCell;
+    inspectCell = null;
     if (view) {
         freshLine(lineStations(view.geom, view.duty));
         motion.year = (params.day - 1) / 365;
@@ -2102,6 +2850,7 @@ el('exportBtn').addEventListener('click', () => {
         URL.revokeObjectURL(a.href);
         lineState = saved;
         plantSig = savedSig;
+        inspectCell = savedInspect;
         lastTick = 0;
         raf = requestAnimationFrame(loop);
     }, 'image/png');
